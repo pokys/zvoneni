@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+echo "[install] installing TUI"
+
 cat > /usr/local/bin/zvoneni-tui <<'EOF'
 #!/bin/bash
 
@@ -11,20 +13,24 @@ pause() {
 get_status() {
   TIME=$(date '+%Y-%m-%d %H:%M:%S')
   GATE=$([ -f /run/clock-ok ] && echo OK || echo WAIT)
-
-  if systemctl is-active zvoneni.target >/dev/null 2>&1; then
-    STATE="RUNNING"
-  else
-    STATE="STOPPED"
-  fi
+  systemctl is-active zvoneni.target >/dev/null 2>&1 && STATE="RUNNING" || STATE="STOPPED"
 }
 
 show_timers() {
-  systemctl list-timers --no-pager | grep zvoneni | \
-    dialog --title "Active timers" --programbox 20 80
+  TMP=$(mktemp)
+
+  systemctl list-timers --no-pager --no-legend \
+    | grep zvoneni \
+    | awk '{printf "%-25s %s\n", $1" "$2, $NF}' \
+    > "$TMP"
+
+  dialog --title "Active timers" --textbox "$TMP" 25 80
+  rm -f "$TMP"
 }
 
 system_info() {
+  TMP=$(mktemp)
+
   {
     echo "Hostname: $(hostname)"
     echo "Time:     $(date)"
@@ -34,53 +40,41 @@ system_info() {
     echo
     echo "IP addresses:"
     ip -4 a | grep inet
-    echo
-  } | dialog --title "System information" --programbox 22 80
+  } > "$TMP"
+
+  dialog --title "System information" --textbox "$TMP" 22 80
+  rm -f "$TMP"
 }
 
 show_help() {
   dialog --title "How the bell system works" --msgbox "
 === OVERVIEW ===
-This system uses systemd timers, not cron.
+This system uses systemd timers (not cron).
 
-Flow:
-  schedule.txt
-      ↓
-  generate-timers.sh
-      ↓
-  zvoneni-*.timer
-      ↓
-  zvoneni.target (ON/OFF switch)
-      ↓
-  zvoneni@.service
-      ↓
-  aplay (sound output)
+FLOW:
+schedule.txt
+ → generate-timers.sh
+ → systemd timers
+ → zvoneni.target
+ → zvoneni@.service
+ → aplay (sound output)
 
-=== TIME SAFETY ===
-clock-watch.service monitors:
-  - NTP sync OR
-  - uptime > 5 minutes
+TIME SAFETY:
+clock-watch.service creates /run/clock-ok
+Only then bells are allowed to ring.
 
-Only when /run/clock-ok exists,
-bells are allowed to ring.
+FILES:
+Schedule: /opt/zvoneni/schedule.txt
+Sounds:   /opt/zvoneni/sounds/
+TUI:      /usr/local/bin/zvoneni-tui
 
-=== FILES ===
-Schedule:   /opt/zvoneni/schedule.txt
-Sounds:     /opt/zvoneni/sounds/*.wav
-TUI:        /usr/local/bin/zvoneni-tui
-Generator:  /usr/local/bin/generate-timers.sh
+SERVICES:
+clock-watch.service  (time gate)
+zvoneni@.service     (player)
+zvoneni.target       (master switch)
 
-=== SERVICES ===
-clock-watch.service  → time gate
-zvoneni@.service     → sound player
-zvoneni.target       → master switch
-zvoneni-*.timer      → individual bells
-
-=== TIPS ===
-• Edit schedule → Apply schedule
-• Test bell anytime
-• Start/Stop system with toggle
-• For RO root enable overlay via raspi-config
+Overlay FS (optional):
+Enable via raspi-config for production
 " 25 75
 }
 
@@ -122,10 +116,13 @@ Clock gate:  $GATE
     3) system_info ;;
     4) nano /opt/zvoneni/schedule.txt ;;
     5)
-      dialog --yesno "Apply new schedule and regenerate timers?" 8 60 && \
+      dialog --yesno "Apply new schedule?" 7 40 && \
       generate-timers.sh && pause "Schedule applied"
       ;;
-    6) systemctl start zvoneni@normal.service && pause "Test bell played" ;;
+    6)
+      systemctl start zvoneni@normal.service
+      pause "Test bell played"
+      ;;
     7) toggle_system ;;
     8) show_help ;;
     9) clear; exit ;;
