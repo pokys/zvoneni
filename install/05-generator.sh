@@ -1,45 +1,71 @@
 #!/bin/bash
 set -e
 
+echo "[generator] installing generator script"
+
 cat > /usr/local/bin/generate-timers.sh <<'EOF'
 #!/bin/bash
 set -e
 
-systemctl disable zvoneni-*.timer 2>/dev/null || true
-rm -f /etc/systemd/system/zvoneni-*.timer
-rm -f /etc/systemd/system/zvoneni-*.service
+SCHEDULE="/opt/zvoneni/schedule.txt"
+SYSTEMD="/etc/systemd/system"
+WANTS="$SYSTEMD/zvoneni.target.wants"
 
-while read day time type; do
-  [[ -z "$day" || "$day" =~ ^# ]] && continue
+echo "[generator] stopping bell system"
+systemctl stop zvoneni.target 2>/dev/null || true
 
-  name="zvoneni-${day}-${time//:/}"
+echo "[generator] cleaning old timers"
+rm -f "$SYSTEMD"/zvoneni-*.timer
+rm -f "$SYSTEMD"/zvoneni-*.service
+rm -f "$WANTS"/zvoneni-*.timer
 
-  cat > "/etc/systemd/system/${name}.timer" <<EOT
+echo "[generator] generating timers"
+
+while read -r day time type; do
+  [[ "$day" =~ ^#|^$ ]] && continue
+
+  # normalize day (Mon Tue Wed ...)
+  DAY=$(echo "$day" | tr '[:upper:]' '[:lower:]')
+  DAY=${DAY^}
+
+  NAME="zvoneni-${DAY}-${time//:/}"
+
+  cat > "$SYSTEMD/$NAME.timer" <<TIMER
 [Unit]
-Description=Bell $day $time ($type)
+Description=School bell $DAY $time
 
 [Timer]
-OnCalendar=$day $time
-AccuracySec=1s
+OnCalendar=$DAY *-*-* $time:00
+Persistent=true
+Unit=$NAME.service
 
 [Install]
 WantedBy=zvoneni.target
-EOT
+TIMER
 
-  cat > "/etc/systemd/system/${name}.service" <<EOT
+  cat > "$SYSTEMD/$NAME.service" <<SERVICE
+[Unit]
+Description=Play bell sound
+
 [Service]
-ExecStart=/usr/bin/systemctl start zvoneni@${type}.service
-EOT
+Type=oneshot
+ExecStart=/usr/bin/aplay /opt/zvoneni/sounds/$type.wav
+SERVICE
 
-done < /opt/zvoneni/schedule.txt
+done < "$SCHEDULE"
 
+echo "[generator] reloading systemd"
 systemctl daemon-reload
 
-for t in /etc/systemd/system/zvoneni-*.timer; do
+echo "[generator] enabling timers"
+for t in "$SYSTEMD"/zvoneni-*.timer; do
   systemctl enable "$(basename "$t")"
 done
 
-systemctl restart zvoneni.target
+echo "[generator] starting bell system"
+systemctl start zvoneni.target
+
+echo "[generator] done"
 EOF
 
 chmod +x /usr/local/bin/generate-timers.sh
