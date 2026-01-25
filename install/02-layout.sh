@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-mkdir -p /opt/zvoneni/{sounds}
+mkdir -p /opt/zvoneni/sounds
 mkdir -p /usr/local/bin
 
 [ -f /opt/zvoneni/schedule.txt ] || cat > /opt/zvoneni/schedule.txt <<EOF
