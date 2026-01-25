@@ -21,10 +21,10 @@ show_timers() {
 
   systemctl list-timers --no-pager --no-legend \
     | grep zvoneni \
-    | awk '{printf "%-25s %s\n", $1" "$2, $NF}' \
+    | awk '{printf "%-25s %-10s %s\n", $1" "$2, $3, $NF}' \
     > "$TMP"
 
-  dialog --title "Active timers" --textbox "$TMP" 25 80
+  dialog --title "Active timers (NEXT / IN / UNIT)" --textbox "$TMP" 25 80
   rm -f "$TMP"
 }
 
