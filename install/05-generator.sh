@@ -5,6 +5,7 @@ cat > /usr/local/bin/generate-timers.sh <<'EOF'
 #!/bin/bash
 set -e
 
+systemctl disable zvoneni-*.timer 2>/dev/null || true
 rm -f /etc/systemd/system/zvoneni-*.timer
 rm -f /etc/systemd/system/zvoneni-*.service
 
@@ -33,6 +34,11 @@ EOT
 done < /opt/zvoneni/schedule.txt
 
 systemctl daemon-reload
+
+for t in /etc/systemd/system/zvoneni-*.timer; do
+  systemctl enable "$(basename "$t")"
+done
+
 systemctl restart zvoneni.target
 EOF
 
