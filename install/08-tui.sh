@@ -7,7 +7,7 @@ cat > /usr/local/bin/zvoneni-tui <<'EOF'
 #!/bin/bash
 
 pause() {
-  dialog --msgbox "$1" 8 60
+  dialog --msgbox "$1" 8 70
 }
 
 get_status() {
@@ -46,36 +46,47 @@ system_info() {
   rm -f "$TMP"
 }
 
+show_debug() {
+  TMP=$(mktemp)
+
+  {
+    echo "=== FILESYSTEM TIMERS ==="
+    ls -1 /etc/systemd/system/zvoneni-*.timer 2>/dev/null || echo "(none)"
+    echo
+    echo "=== TARGET WANTS ==="
+    ls -1 /etc/systemd/system/zvoneni.target.wants/ 2>/dev/null || echo "(none)"
+    echo
+    echo "=== SYSTEMD TIMERS ==="
+    systemctl list-timers --no-pager | grep zvoneni || echo "(none)"
+    echo
+    echo "=== LAST APPLY OUTPUT ==="
+    [ -f /run/zvoneni-last-apply.log ] && cat /run/zvoneni-last-apply.log || echo "(none)"
+    echo
+    echo "=== LAST 25 LOG LINES ==="
+    journalctl -u zvoneni@* -u zvoneni.target -u clock-watch --no-pager -n 25 || true
+  } > "$TMP"
+
+  dialog --title "Debug information" --textbox "$TMP" 30 100
+  rm -f "$TMP"
+}
+
 show_help() {
   dialog --title "How the bell system works" --msgbox "
-=== OVERVIEW ===
-This system uses systemd timers (not cron).
-
 FLOW:
-schedule.txt
- → generate-timers.sh
- → systemd timers
- → zvoneni.target
- → zvoneni@.service
- → aplay (sound output)
+schedule.txt → generate-timers.sh → systemd timers → zvoneni.target → zvoneni@.service → sound
 
-TIME SAFETY:
-clock-watch.service creates /run/clock-ok
-Only then bells are allowed to ring.
+CLOCK GATE:
+- waits for NTP at boot (max 3 min)
+- then allows bells even without internet
+- never blocks again
 
-FILES:
-Schedule: /opt/zvoneni/schedule.txt
-Sounds:   /opt/zvoneni/sounds/
-TUI:      /usr/local/bin/zvoneni-tui
-
-SERVICES:
-clock-watch.service  (time gate)
-zvoneni@.service     (player)
-zvoneni.target       (master switch)
-
-Overlay FS (optional):
-Enable via raspi-config for production
-" 25 75
+DEBUG:
+Debug menu shows:
+- real timers on filesystem
+- systemd timers
+- last apply output
+- recent logs
+" 20 70
 }
 
 toggle_system() {
@@ -99,7 +110,7 @@ SYSTEM STATE: $STATE
 
 Time:        $TIME
 Clock gate:  $GATE
-" 20 70 10 \
+" 22 75 12 \
     1 "Refresh status" \
     2 "Show active timers" \
     3 "System information" \
@@ -107,8 +118,9 @@ Clock gate:  $GATE
     5 "Apply schedule" \
     6 "Test bell" \
     7 "Toggle bell system (START/STOP)" \
-    8 "Help" \
-    9 "Exit" 3>&1 1>&2 2>&3)
+    8 "Debug" \
+    9 "Help" \
+    0 "Exit" 3>&1 1>&2 2>&3)
 
   case $choice in
     1) : ;;
@@ -118,8 +130,8 @@ Clock gate:  $GATE
     5)
       dialog --yesno "Apply new schedule?" 7 40 || continue
 
-      OUT=$(generate-timers.sh 2>&1)
-      RC=$?
+      OUT=$(generate-timers.sh 2>&1 | tee /run/zvoneni-last-apply.log)
+      RC=${PIPESTATUS[0]}
 
       if [ $RC -ne 0 ]; then
         dialog --title "Schedule error" --msgbox "$OUT" 20 70
@@ -132,8 +144,9 @@ Clock gate:  $GATE
       pause "Test bell played"
       ;;
     7) toggle_system ;;
-    8) show_help ;;
-    9) clear; exit ;;
+    8) show_debug ;;
+    9) show_help ;;
+    0) clear; exit ;;
   esac
 done
 EOF
