@@ -116,8 +116,16 @@ Clock gate:  $GATE
     3) system_info ;;
     4) nano /opt/zvoneni/schedule.txt ;;
     5)
-      dialog --yesno "Apply new schedule?" 7 40 && \
-      generate-timers.sh && pause "Schedule applied"
+      dialog --yesno "Apply new schedule?" 7 40 || continue
+
+      OUT=$(generate-timers.sh 2>&1)
+      RC=$?
+
+      if [ $RC -ne 0 ]; then
+        dialog --title "Schedule error" --msgbox "$OUT" 20 70
+      else
+        dialog --title "OK" --msgbox "Schedule applied successfully." 6 50
+      fi
       ;;
     6)
       systemctl start zvoneni@normal.service
