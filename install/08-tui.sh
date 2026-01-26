@@ -86,7 +86,7 @@ Debug menu shows:
 - systemd timers
 - last apply output
 - recent logs
-" 20 70
+" 22 70
 }
 
 toggle_system() {
@@ -98,6 +98,29 @@ toggle_system() {
     systemctl start zvoneni.target
     pause "Bell system STARTED"
   fi
+}
+
+test_sound() {
+  SOUNDS=()
+  for f in /opt/zvoneni/sounds/*.wav; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .wav)
+    SOUNDS+=("$name" "$f")
+  done
+
+  if [ ${#SOUNDS[@]} -eq 0 ]; then
+    dialog --msgbox "No sounds found in /opt/zvoneni/sounds" 7 50
+    return
+  fi
+
+  CHOICE=$(dialog --title "Select sound to play" \
+    --menu "Choose sound:" 15 60 10 \
+    "${SOUNDS[@]}" 3>&1 1>&2 2>&3)
+
+  [ -z "$CHOICE" ] && return
+
+  systemctl start "zvoneni@${CHOICE}.service"
+  pause "Played sound: $CHOICE"
 }
 
 while true; do
@@ -116,7 +139,7 @@ Clock gate:  $GATE
     3 "System information" \
     4 "Edit schedule" \
     5 "Apply schedule" \
-    6 "Test bell" \
+    6 "Test bell (select sound)" \
     7 "Toggle bell system (START/STOP)" \
     8 "Debug" \
     9 "Help" \
@@ -130,19 +153,16 @@ Clock gate:  $GATE
     5)
       dialog --yesno "Apply new schedule?" 7 40 || continue
 
-      OUT=$(generate-timers.sh 2>&1 | tee /run/zvoneni-last-apply.log)
+      generate-timers.sh 2>&1 | tee /run/zvoneni-last-apply.log
       RC=${PIPESTATUS[0]}
 
       if [ $RC -ne 0 ]; then
-        dialog --title "Schedule error" --msgbox "$OUT" 20 70
+        dialog --title "Schedule error" --textbox /run/zvoneni-last-apply.log 25 80
       else
-        dialog --title "OK" --msgbox "Schedule applied successfully." 6 50
+        dialog --title "Schedule applied" --textbox /run/zvoneni-last-apply.log 25 80
       fi
       ;;
-    6)
-      systemctl start zvoneni@normal.service
-      pause "Test bell played"
-      ;;
+    6) test_sound ;;
     7) toggle_system ;;
     8) show_debug ;;
     9) show_help ;;
