@@ -1,64 +1,119 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "[generator] installing generator script"
+GENERATOR="/usr/local/bin/generate-timers.sh"
 
-cat > /usr/local/bin/generate-timers.sh <<'EOF'
+cat > "$GENERATOR" <<'EOF'
 #!/bin/bash
-set -e
+set -euo pipefail
 
 SCHEDULE="/opt/zvoneni/schedule.txt"
-SYSTEMD="/etc/systemd/system"
-WANTS="$SYSTEMD/zvoneni.target.wants"
+SOUNDS_DIR="/opt/zvoneni/sounds"
 
 echo "[generator] stopping bell system"
 systemctl stop zvoneni.target 2>/dev/null || true
 
-echo "[generator] cleaning old timers"
-rm -f "$SYSTEMD"/zvoneni-*.timer
-rm -f "$SYSTEMD"/zvoneni-*.service
-rm -f "$WANTS"/zvoneni-*.timer
+# ------------------------------------------------------------
+# VALIDATION
+# ------------------------------------------------------------
+echo "[generator] validating schedule"
 
-echo "[generator] generating timers"
+DAYS="Mon Tue Wed Thu Fri"
+ERROR=0
+lineno=0
 
-while read -r day time type; do
-  [[ "$day" =~ ^#|^$ ]] && continue
+AVAILABLE_SOUNDS=$(ls "$SOUNDS_DIR" | sed 's/\.wav$//')
 
-  # normalize day (Mon Tue Wed ...)
-  DAY=$(echo "$day" | tr '[:upper:]' '[:lower:]')
-  DAY=${DAY^}
+while read -r line; do
+  lineno=$((lineno+1))
 
-  NAME="zvoneni-${DAY}-${time//:/}"
+  [[ -z "$line" ]] && continue
+  [[ "$line" =~ ^# ]] && continue
 
-  cat > "$SYSTEMD/$NAME.timer" <<TIMER
-[Unit]
-Description=School bell $DAY $time
+  read -r DAY TIME TYPE <<<"$line"
 
-[Timer]
-OnCalendar=$DAY *-*-* $time:00
-Persistent=true
-Unit=$NAME.service
+  if [[ -z "${TYPE:-}" ]]; then
+    echo "ERROR line $lineno: invalid format (need DAY TIME TYPE)"
+    ERROR=1
+    continue
+  fi
 
-[Install]
-WantedBy=zvoneni.target
-TIMER
+  if ! echo "$DAYS" | grep -qw "$DAY"; then
+    echo "ERROR line $lineno: invalid day '$DAY'"
+    ERROR=1
+  fi
 
-  cat > "$SYSTEMD/$NAME.service" <<SERVICE
-[Unit]
-Description=Play bell sound
+  if ! [[ "$TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+    echo "ERROR line $lineno: invalid time '$TIME'"
+    ERROR=1
+  fi
 
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/aplay /opt/zvoneni/sounds/$type.wav
-SERVICE
+  if ! echo "$AVAILABLE_SOUNDS" | grep -qw "$TYPE"; then
+    echo "ERROR line $lineno: sound '$TYPE' not found in $SOUNDS_DIR"
+    ERROR=1
+  fi
 
 done < "$SCHEDULE"
 
+if [ "$ERROR" -ne 0 ]; then
+  echo
+  echo "[generator] schedule validation FAILED – no changes applied"
+  exit 1
+fi
+
+echo "[generator] validation OK"
+
+# ------------------------------------------------------------
+# CLEAN OLD UNITS
+# ------------------------------------------------------------
+echo "[generator] cleaning old timers"
+
+rm -f /etc/systemd/system/zvoneni-*.timer
+rm -f /etc/systemd/system/zvoneni-*.service
+rm -f /etc/systemd/system/zvoneni.target.wants/zvoneni-*.timer
+
+# ------------------------------------------------------------
+# GENERATE UNITS
+# ------------------------------------------------------------
+echo "[generator] generating timers"
+
+while read -r DAY TIME TYPE; do
+  [[ -z "$DAY" ]] && continue
+  [[ "$DAY" =~ ^# ]] && continue
+
+  UNIT="zvoneni-${DAY}-${TIME//:/}"
+
+  cat > "/etc/systemd/system/${UNIT}.service" <<EOL
+[Unit]
+Description=School bell ${DAY} ${TIME} (${TYPE})
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/aplay ${SOUNDS_DIR}/${TYPE}.wav
+EOL
+
+  cat > "/etc/systemd/system/${UNIT}.timer" <<EOL
+[Unit]
+Description=Timer for ${UNIT}
+
+[Timer]
+OnCalendar=${DAY} ${TIME}
+Persistent=true
+
+[Install]
+WantedBy=zvoneni.target
+EOL
+
+done < "$SCHEDULE"
+
+# ------------------------------------------------------------
+# ENABLE + RELOAD
+# ------------------------------------------------------------
 echo "[generator] reloading systemd"
 systemctl daemon-reload
 
 echo "[generator] enabling timers"
-for t in "$SYSTEMD"/zvoneni-*.timer; do
+for t in /etc/systemd/system/zvoneni-*.timer; do
   systemctl enable "$(basename "$t")"
 done
 
@@ -68,4 +123,4 @@ systemctl start zvoneni.target
 echo "[generator] done"
 EOF
 
-chmod +x /usr/local/bin/generate-timers.sh
+chmod +x "$GENERATOR"
