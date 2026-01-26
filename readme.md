@@ -13,6 +13,7 @@ Zvonění je řízeno rozvrhem a přehrává zvuk přes 3.5mm jack.
 - systemd timers (žádný cron)
 - automatický start po bootu
 - ochrana proti špatnému času (NTP gate)
+- tolerantní NTP gate (po bootu čeká, pak pustí zvonění i bez internetu)
 - textové TUI přes SSH
 - samoopravné po rebootu
 - připravené pro RO filesystem
