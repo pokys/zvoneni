@@ -41,7 +41,7 @@ else
 fi
 
 echo
-echo "Admin UI:    zvoneni-tui"
+echo "Admin UI:   sudo zvoneni-tui"
 echo
 EOF
 
