@@ -98,6 +98,7 @@ Description=Timer for ${UNIT}
 
 [Timer]
 OnCalendar=${DAY} ${TIME}
+AccuracySec=1s
 Persistent=true
 
 [Install]
