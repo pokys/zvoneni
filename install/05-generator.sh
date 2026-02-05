@@ -28,11 +28,20 @@ if [ ! -d "$SOUNDS_DIR" ]; then
   exit 1
 fi
 
-AVAILABLE_SOUNDS=$(find "$SOUNDS_DIR" -maxdepth 1 -type f -name '*.wav' -printf '%f\n' 2>/dev/null | sed 's/\.wav$//')
-if [ -z "$AVAILABLE_SOUNDS" ]; then
+shopt -s nullglob
+sound_files=("$SOUNDS_DIR"/*.wav)
+shopt -u nullglob
+
+if [ ${#sound_files[@]} -eq 0 ]; then
   echo "ERROR: no sounds found in $SOUNDS_DIR"
   exit 1
 fi
+
+AVAILABLE_SOUNDS=""
+for f in "${sound_files[@]}"; do
+  name=$(basename "$f" .wav)
+  AVAILABLE_SOUNDS="${AVAILABLE_SOUNDS}${name}"$'\n'
+done
 
 while read -r line; do
   lineno=$((lineno+1))
