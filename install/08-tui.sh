@@ -19,12 +19,15 @@ get_status() {
 show_timers() {
   TMP=$(mktemp)
 
-  systemctl list-timers --no-pager --no-legend --sort=next \
-    | grep zvoneni \
-    | awk '{printf "%-25s %-10s %s\n", $1" "$2, $3, $NF}' \
+  systemctl list-timers --all --no-pager \
+    | grep -i zvoneni \
     > "$TMP"
 
-  dialog --title "Active timers (NEXT / IN / UNIT)" --textbox "$TMP" 25 80
+  if [ ! -s "$TMP" ]; then
+    echo "(none)" > "$TMP"
+  fi
+
+  dialog --title "Active timers (systemctl list-timers)" --textbox "$TMP" 25 100
   rm -f "$TMP"
 }
 
