@@ -90,6 +90,7 @@ ls /run/clock-ok
 ```
 
 Pokud **neexistuje**, systém **nezvoní** (ochrana proti špatnému času).
+Gate platí pro ruční i plánované zvonění.
 
 ---
 
@@ -123,6 +124,10 @@ systemctl restart zvoneni.target
 ```bash
 generate-timers.sh
 ```
+
+Poznámky:
+- prázdný rozvrh se neaplikuje (ochrana proti vypnutí systému)
+- pokud nejsou žádné `.wav` v `/opt/zvoneni/sounds/`, generátor skončí chybou
 
 ---
 

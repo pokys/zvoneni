@@ -12,7 +12,7 @@ Zvonění je řízeno rozvrhem a přehrává zvuk přes 3.5mm jack.
 
 - systemd timers (žádný cron)
 - automatický start po bootu
-- ochrana proti špatnému času (NTP gate)
+- ochrana proti špatnému času (NTP gate) – platí pro ruční i plánované zvonění
 - tolerantní NTP gate (po bootu čeká, pak pustí zvonění i bez internetu)
 - textové TUI přes SSH
 - samoopravné po rebootu
@@ -50,7 +50,8 @@ Vše se spravuje přes TUI.
 
 - `ADMIN.md` – provoz a údržba
 - `schedule.txt` – rozvrh
-- `/opt/zvoneni/sounds/` – zvuky
+- `/opt/zvoneni/sounds/` – zvuky (musí obsahovat alespoň jeden `.wav`)
+- prázdný rozvrh se neaplikuje (ochrana proti vypnutí systému)
 
 ---
 
