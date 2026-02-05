@@ -19,7 +19,7 @@ get_status() {
 show_timers() {
   TMP=$(mktemp)
 
-  systemctl list-timers --no-pager --no-legend \
+  systemctl list-timers --no-pager --no-legend --sort=next \
     | grep zvoneni \
     | awk '{printf "%-25s %-10s %s\n", $1" "$2, $3, $NF}' \
     > "$TMP"
@@ -39,7 +39,7 @@ system_info() {
     uptime
     echo
     echo "IP addresses:"
-    ip -4 a | grep inet
+    ip -4 a | grep "scope global"
   } > "$TMP"
 
   dialog --title "System information" --textbox "$TMP" 22 80
@@ -123,6 +123,10 @@ test_sound() {
   pause "Played sound: $CHOICE"
 }
 
+open_mixer() {
+  alsamixer
+}
+
 while true; do
   get_status
 
@@ -141,8 +145,9 @@ Clock gate:  $GATE
     5 "Apply schedule" \
     6 "Test bell (select sound)" \
     7 "Toggle bell system (START/STOP)" \
-    8 "Debug" \
-    9 "Help" \
+    8 "Audio mixer (alsamixer)" \
+    9 "Debug" \
+    10 "Help" \
     0 "Exit" 3>&1 1>&2 2>&3)
 
   case $choice in
@@ -164,8 +169,9 @@ Clock gate:  $GATE
       ;;
     6) test_sound ;;
     7) toggle_system ;;
-    8) show_debug ;;
-    9) show_help ;;
+    8) open_mixer ;;
+    9) show_debug ;;
+    10) show_help ;;
     0) clear; exit ;;
   esac
 done
