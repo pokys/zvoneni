@@ -20,15 +20,25 @@ echo "[generator] validating schedule"
 
 DAYS="Mon Tue Wed Thu Fri"
 ERROR=0
+VALID_COUNT=0
 lineno=0
 
-AVAILABLE_SOUNDS=$(ls "$SOUNDS_DIR" | sed 's/\.wav$//')
+if [ ! -d "$SOUNDS_DIR" ]; then
+  echo "ERROR: sounds directory not found: $SOUNDS_DIR"
+  exit 1
+fi
+
+AVAILABLE_SOUNDS=$(find "$SOUNDS_DIR" -maxdepth 1 -type f -name '*.wav' -printf '%f\n' 2>/dev/null | sed 's/\.wav$//')
+if [ -z "$AVAILABLE_SOUNDS" ]; then
+  echo "ERROR: no sounds found in $SOUNDS_DIR"
+  exit 1
+fi
 
 while read -r line; do
   lineno=$((lineno+1))
 
   [[ -z "$line" ]] && continue
-  [[ "$line" =~ ^# ]] && continue
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
   read -r DAY TIME TYPE <<<"$line"
 
@@ -53,11 +63,21 @@ while read -r line; do
     ERROR=1
   fi
 
+  if [ "$ERROR" -eq 0 ]; then
+    VALID_COUNT=$((VALID_COUNT+1))
+  fi
+
 done < "$SCHEDULE"
 
 if [ "$ERROR" -ne 0 ]; then
   echo
   echo "[generator] schedule validation FAILED – no changes applied"
+  exit 1
+fi
+
+if [ "$VALID_COUNT" -eq 0 ]; then
+  echo
+  echo "[generator] schedule is empty – no changes applied"
   exit 1
 fi
 
@@ -89,7 +109,7 @@ Description=School bell ${DAY} ${TIME} (${TYPE})
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/aplay ${SOUNDS_DIR}/${TYPE}.wav
+ExecStart=/bin/systemctl start zvoneni@${TYPE}.service
 EOL
 
   cat > "/etc/systemd/system/${UNIT}.timer" <<EOL
@@ -114,7 +134,16 @@ echo "[generator] reloading systemd"
 systemctl daemon-reload
 
 echo "[generator] enabling timers"
-for t in /etc/systemd/system/zvoneni-*.timer; do
+shopt -s nullglob
+timers=(/etc/systemd/system/zvoneni-*.timer)
+shopt -u nullglob
+
+if [ ${#timers[@]} -eq 0 ]; then
+  echo "[generator] no timers generated – no changes applied"
+  exit 1
+fi
+
+for t in "${timers[@]}"; do
   systemctl enable "$(basename "$t")"
 done
 
