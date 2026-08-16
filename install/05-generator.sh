@@ -95,6 +95,44 @@ fi
 echo "[generator] validation OK"
 
 # ------------------------------------------------------------
+# AMPLIFIER PRE-ROLL
+# ------------------------------------------------------------
+# The amplifier needs to be powered up before the bell, but the sound
+# still has to start exactly at the scheduled time. So the timer itself
+# is moved earlier by the pre-roll and zvoneni-ring sleeps it off.
+AMP_ENABLED=0
+AMP_PRE_SECONDS=0
+if [ -x /usr/local/bin/zvoneni-amp ]; then
+  eval "$(/usr/local/bin/zvoneni-amp config 2>/dev/null)" || true
+fi
+
+PRE=0
+if [ "$AMP_ENABLED" -eq 1 ]; then
+  PRE="$AMP_PRE_SECONDS"
+  echo "[generator] amplifier pre-roll: ${PRE}s"
+fi
+
+# DAY HH:MM offset_seconds -> "DAY HH:MM:SS", borrowing into the previous
+# day when the pre-roll crosses midnight (Mon 00:00 -> Sun 23:59:50).
+shift_time() {
+  local day="$1" t="$2" off="$3" back=0 i
+  local total=$(( 10#${t%%:*} * 3600 + 10#${t##*:} * 60 - off ))
+
+  while [ "$total" -lt 0 ]; do
+    total=$((total + 86400))
+    back=$((back + 1))
+  done
+
+  local -a W=(Mon Tue Wed Thu Fri Sat Sun)
+  for i in "${!W[@]}"; do
+    if [ "${W[$i]}" = "$day" ]; then break; fi
+  done
+
+  printf '%s %02d:%02d:%02d\n' "${W[$(( (i - back + 7) % 7 ))]}" \
+    $((total / 3600)) $((total % 3600 / 60)) $((total % 60))
+}
+
+# ------------------------------------------------------------
 # GENERATE UNITS INTO A STAGING DIR
 # ------------------------------------------------------------
 # Units are built in /run (tmpfs, i.e. RAM) and only copied onto the SD
@@ -110,7 +148,10 @@ while read -r DAY TIME TYPE; do
   [[ -z "$DAY" ]] && continue
   [[ "$DAY" =~ ^# ]] && continue
 
+  # Unit names stay keyed on the scheduled time, not the shifted one, so
+  # changing the pre-roll does not churn every file name.
   UNIT="zvoneni-${DAY}-${TIME//:/}"
+  CAL=$(shift_time "$DAY" "$TIME" "$PRE")
 
   cat > "$STAGE/${UNIT}.service" <<EOL
 [Unit]
@@ -118,15 +159,15 @@ Description=School bell ${DAY} ${TIME} (${TYPE})
 
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl start zvoneni@${TYPE}.service
+ExecStart=/bin/systemctl start --no-block zvoneni@${TYPE}.service
 EOL
 
   cat > "$STAGE/${UNIT}.timer" <<EOL
 [Unit]
-Description=Timer for ${UNIT}
+Description=Timer for ${UNIT} (fires ${CAL}, pre-roll ${PRE}s)
 
 [Timer]
-OnCalendar=${DAY} ${TIME}
+OnCalendar=${CAL}
 AccuracySec=1s
 Persistent=true
 
