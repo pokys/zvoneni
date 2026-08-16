@@ -97,9 +97,12 @@ echo "[generator] validation OK"
 # ------------------------------------------------------------
 echo "[generator] cleaning old timers"
 
-rm -f /etc/systemd/system/zvoneni-*.timer
-rm -f /etc/systemd/system/zvoneni-*.service
-rm -f /etc/systemd/system/zvoneni.target.wants/zvoneni-*.timer
+# Match ONLY generated per-bell units (zvoneni-Mon-0800 ...).
+# A bare zvoneni-* glob would also match zvoneni-generator.service,
+# i.e. the generator would delete its own boot unit.
+rm -f /etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*.timer
+rm -f /etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*.service
+rm -f /etc/systemd/system/zvoneni.target.wants/zvoneni-[MTWF][a-z][a-z]-*.timer
 
 # ------------------------------------------------------------
 # GENERATE UNITS
