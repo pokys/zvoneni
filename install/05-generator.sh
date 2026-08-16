@@ -10,8 +10,10 @@ set -euo pipefail
 SCHEDULE="/opt/zvoneni/schedule.txt"
 SOUNDS_DIR="/opt/zvoneni/sounds"
 
-echo "[generator] stopping bell system"
-systemctl stop zvoneni.target 2>/dev/null || true
+# NOTE: the bell system is deliberately NOT stopped here. It is stopped
+# further down, only once we know the schedule is valid AND something
+# actually changed - otherwise a rejected schedule would leave the
+# appliance silent.
 
 # ------------------------------------------------------------
 # VALIDATION
@@ -93,21 +95,16 @@ fi
 echo "[generator] validation OK"
 
 # ------------------------------------------------------------
-# CLEAN OLD UNITS
+# GENERATE UNITS INTO A STAGING DIR
 # ------------------------------------------------------------
-echo "[generator] cleaning old timers"
-
-# Match ONLY generated per-bell units (zvoneni-Mon-0800 ...).
-# A bare zvoneni-* glob would also match zvoneni-generator.service,
-# i.e. the generator would delete its own boot unit.
-rm -f /etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*.timer
-rm -f /etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*.service
-rm -f /etc/systemd/system/zvoneni.target.wants/zvoneni-[MTWF][a-z][a-z]-*.timer
-
-# ------------------------------------------------------------
-# GENERATE UNITS
-# ------------------------------------------------------------
+# Units are built in /run (tmpfs, i.e. RAM) and only copied onto the SD
+# card when they actually differ from what is already installed. The
+# generator runs on every boot, so unconditional rewrites would burn the
+# card for nothing.
 echo "[generator] generating timers"
+
+STAGE=$(mktemp -d /run/zvoneni-gen.XXXXXX)
+trap 'rm -rf "$STAGE"' EXIT
 
 while read -r DAY TIME TYPE; do
   [[ -z "$DAY" ]] && continue
@@ -115,7 +112,7 @@ while read -r DAY TIME TYPE; do
 
   UNIT="zvoneni-${DAY}-${TIME//:/}"
 
-  cat > "/etc/systemd/system/${UNIT}.service" <<EOL
+  cat > "$STAGE/${UNIT}.service" <<EOL
 [Unit]
 Description=School bell ${DAY} ${TIME} (${TYPE})
 
@@ -124,7 +121,7 @@ Type=oneshot
 ExecStart=/bin/systemctl start zvoneni@${TYPE}.service
 EOL
 
-  cat > "/etc/systemd/system/${UNIT}.timer" <<EOL
+  cat > "$STAGE/${UNIT}.timer" <<EOL
 [Unit]
 Description=Timer for ${UNIT}
 
@@ -139,23 +136,80 @@ EOL
 
 done < "$SCHEDULE"
 
-# ------------------------------------------------------------
-# ENABLE + RELOAD
-# ------------------------------------------------------------
-echo "[generator] reloading systemd"
-systemctl daemon-reload
-
-echo "[generator] enabling timers"
 shopt -s nullglob
-timers=(/etc/systemd/system/zvoneni-*.timer)
+staged_timers=("$STAGE"/*.timer)
 shopt -u nullglob
 
-if [ ${#timers[@]} -eq 0 ]; then
+if [ ${#staged_timers[@]} -eq 0 ]; then
   echo "[generator] no timers generated – no changes applied"
   exit 1
 fi
 
-for t in "${timers[@]}"; do
+# ------------------------------------------------------------
+# DIFF AGAINST INSTALLED UNITS
+# ------------------------------------------------------------
+# Match ONLY generated per-bell units (zvoneni-Mon-0800 ...).
+# A bare zvoneni-* glob would also match zvoneni-generator.service,
+# i.e. the generator would touch its own boot unit.
+INSTALLED_GLOB='/etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*'
+WANTS_DIR="/etc/systemd/system/zvoneni.target.wants"
+
+CHANGED=0
+
+# new or modified units
+for f in "$STAGE"/*; do
+  cmp -s "$f" "/etc/systemd/system/$(basename "$f")" || CHANGED=1
+done
+
+# missing enable symlinks
+for f in "${staged_timers[@]}"; do
+  [ -L "$WANTS_DIR/$(basename "$f")" ] || CHANGED=1
+done
+
+# units on disk that the schedule no longer contains
+shopt -s nullglob
+stale=()
+for f in ${INSTALLED_GLOB}.timer ${INSTALLED_GLOB}.service; do
+  [ -e "$STAGE/$(basename "$f")" ] || stale+=("$f")
+done
+shopt -u nullglob
+[ ${#stale[@]} -eq 0 ] || CHANGED=1
+
+if [ "$CHANGED" -eq 0 ]; then
+  echo "[generator] schedule unchanged – nothing written to disk"
+  systemctl start zvoneni.target
+  echo "[generator] done"
+  exit 0
+fi
+
+# ------------------------------------------------------------
+# APPLY
+# ------------------------------------------------------------
+echo "[generator] stopping bell system"
+systemctl stop zvoneni.target 2>/dev/null || true
+
+if [ ${#stale[@]} -gt 0 ]; then
+  echo "[generator] removing ${#stale[@]} obsolete unit(s)"
+  for f in "${stale[@]}"; do
+    rm -f "$f" "$WANTS_DIR/$(basename "$f")"
+  done
+fi
+
+WRITTEN=0
+for f in "$STAGE"/*; do
+  target="/etc/systemd/system/$(basename "$f")"
+  if ! cmp -s "$f" "$target"; then
+    cp "$f" "$target"
+    WRITTEN=$((WRITTEN+1))
+  fi
+done
+echo "[generator] wrote $WRITTEN unit file(s)"
+
+echo "[generator] reloading systemd"
+systemctl daemon-reload
+
+echo "[generator] enabling timers"
+for t in "${staged_timers[@]}"; do
   systemctl enable "$(basename "$t")"
 done
 
