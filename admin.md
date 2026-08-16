@@ -206,9 +206,9 @@ Použij jen pokud je systém rozbitý:
 ```bash
 systemctl stop zvoneni.target
 
-rm -f /etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*.timer
-rm -f /etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*.service
-rm -f /etc/systemd/system/zvoneni.target.wants/zvoneni-[MTWF][a-z][a-z]-*.timer
+rm -f /etc/systemd/system/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9].timer
+rm -f /etc/systemd/system/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9].service
+rm -f /etc/systemd/system/zvoneni.target.wants/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9].timer
 
 systemctl daemon-reload
 generate-timers.sh

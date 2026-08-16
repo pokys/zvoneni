@@ -189,10 +189,13 @@ fi
 # ------------------------------------------------------------
 # DIFF AGAINST INSTALLED UNITS
 # ------------------------------------------------------------
-# Match ONLY generated per-bell units (zvoneni-Mon-0800 ...).
-# A bare zvoneni-* glob would also match zvoneni-generator.service,
-# i.e. the generator would touch its own boot unit.
-INSTALLED_GLOB='/etc/systemd/system/zvoneni-[MTWF][a-z][a-z]-*'
+# Match ONLY generated per-bell units: zvoneni-<Day>-<HHMM>. A bare
+# zvoneni-* glob would also match zvoneni-generator.service and
+# zvoneni-amp-reset.service, i.e. the generator would eat units it does
+# not own. The day part is matched generically rather than against the
+# five weekdays we accept today, so adding weekends later cannot leave
+# orphaned units behind.
+INSTALLED_GLOB='/etc/systemd/system/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9]'
 WANTS_DIR="/etc/systemd/system/zvoneni.target.wants"
 
 CHANGED=0
