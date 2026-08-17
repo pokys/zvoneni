@@ -24,8 +24,7 @@ else
   CLOCK="WAIT"
 fi
 
-NEXT=$(systemctl list-timers --no-legend | grep zvoneni | head -n1 | awk '{print $1" "$2}')
-LEFT=$(systemctl list-timers --no-legend | grep zvoneni | head -n1 | awk '{print $3}')
+NEXT=$(/usr/local/bin/zvoneni-next-bell 2>/dev/null || echo "-")
 
 COUNT=$(systemctl list-timers --no-legend | grep -c zvoneni)
 
@@ -33,12 +32,7 @@ echo "State:       $STATE"
 echo "Time:        $TIME"
 echo "Clock:       $CLOCK"
 echo "Timers:      $COUNT active"
-
-if [ -n "$NEXT" ]; then
-  echo "Next bell:   $NEXT (in $LEFT)"
-else
-  echo "Next bell:   -"
-fi
+echo "Next bell:   $NEXT"
 
 echo
 echo "Admin UI:   sudo zvoneni-tui"

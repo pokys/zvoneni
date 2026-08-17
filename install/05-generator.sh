@@ -264,3 +264,67 @@ echo "[generator] done"
 EOF
 
 chmod +x "$GENERATOR"
+
+# ------------------------------------------------------------
+# zvoneni-next-bell - when the next bell actually rings
+# ------------------------------------------------------------
+cat > /usr/local/bin/zvoneni-next-bell <<'EOF'
+#!/bin/bash
+# Print when the next bell rings, as "<timestamp> (in <duration>)".
+#
+# Timers fire AMP_PRE_SECONDS early so the amplifier can warm up, so the
+# NEXT column of `systemctl list-timers` is the pre-roll moment, not the
+# bell. Read the scheduled time from systemd and add the pre-roll back.
+# Parsing list-timers columns is deliberately avoided: their layout has
+# changed between systemd releases.
+set -uo pipefail
+
+PRE=0
+if [ -x /usr/local/bin/zvoneni-amp ]; then
+  AMP_ENABLED=0
+  AMP_PRE_SECONDS=0
+  eval "$(/usr/local/bin/zvoneni-amp config 2>/dev/null)" || true
+  if [ "$AMP_ENABLED" -eq 1 ]; then
+    PRE="$AMP_PRE_SECONDS"
+  fi
+fi
+
+shopt -s nullglob
+units=()
+for t in /etc/systemd/system/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9].timer; do
+  units+=("$(basename "$t")")
+done
+shopt -u nullglob
+
+if [ ${#units[@]} -eq 0 ]; then
+  echo "-"
+  exit 0
+fi
+
+# NextElapseUSecRealtime is microseconds since the epoch, or 0/infinity
+# when the timer is not scheduled.
+BEST=$(systemctl show -p NextElapseUSecRealtime --value "${units[@]}" 2>/dev/null \
+       | grep -E '^[0-9]+$' | grep -v '^0$' | sort -n | head -n1)
+
+if [ -z "$BEST" ]; then
+  echo "-"
+  exit 0
+fi
+
+WHEN=$(( BEST / 1000000 + PRE ))
+LEFT=$(( WHEN - $(date +%s) ))
+
+if [ "$LEFT" -le 0 ]; then
+  HUMAN="now"
+elif [ "$LEFT" -ge 86400 ]; then
+  HUMAN="$((LEFT / 86400))d $((LEFT % 86400 / 3600))h"
+elif [ "$LEFT" -ge 3600 ]; then
+  HUMAN="$((LEFT / 3600))h $((LEFT % 3600 / 60))min"
+else
+  HUMAN="$((LEFT / 60))min"
+fi
+
+echo "$(date -d "@$WHEN" '+%Y-%m-%d %H:%M:%S') (in $HUMAN)"
+EOF
+
+chmod +x /usr/local/bin/zvoneni-next-bell

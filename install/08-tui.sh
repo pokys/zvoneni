@@ -54,13 +54,19 @@ apply_schedule() {
 show_timers() {
   TMP=$(mktemp)
 
-  systemctl list-timers --all --no-pager \
-    | grep -i zvoneni \
-    > "$TMP"
+  {
+    echo "Next bell: $(zvoneni-next-bell 2>/dev/null || echo '-')"
+    echo
 
-  if [ ! -s "$TMP" ]; then
-    echo "(none)" > "$TMP"
-  fi
+    amp_load
+    if [ "$AMP_ENABLED" -eq 1 ] && [ "$AMP_PRE_SECONDS" -gt 0 ]; then
+      echo "NOTE: timers fire ${AMP_PRE_SECONDS}s early so the amplifier can warm up,"
+      echo "      so the NEXT column below is ${AMP_PRE_SECONDS}s before the bell itself."
+      echo
+    fi
+
+    systemctl list-timers --all --no-pager | grep -i zvoneni || echo "(none)"
+  } > "$TMP"
 
   dialog --title "Active timers (systemctl list-timers)" --textbox "$TMP" 25 100
   rm -f "$TMP"
