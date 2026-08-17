@@ -64,15 +64,37 @@ Turn it off first:
   reboot, run the update, then turn the overlay back on."
   fi
 
-  # Untracked files are expected here: schedule.txt and amp.conf live in
-  # this directory without being part of the repository. sounds/ is skipped
-  # too - it is the live sound library, and older versions tracked it, so a
-  # school that replaced a stock bell would otherwise be locked out of
-  # updates for good.
-  if [ -n "$(git_repo status --porcelain --untracked-files=no | grep -v '^.. sounds/')" ]; then
+  if [ -n "$(tracked_changes)" ]; then
     die "$REPO has local changes to tracked files - refusing to update.
-Look at them with:  git -C $REPO status"
+Look at them with:  git -C $REPO status
+Discard them with: git -C $REPO checkout -- ."
   fi
+}
+
+# Tracked files that really differ in content.
+#
+# Untracked files are expected here: schedule.txt and amp.conf live in this
+# directory without being part of the repository. sounds/ is skipped too -
+# it is the live sound library, and older versions tracked it, so a school
+# that replaced a stock bell would otherwise be locked out of updates.
+#
+# Mode-only differences are skipped as well. The install instructions say
+# to chmod +x the install scripts, and git tracks the executable bit, so
+# following them left the checkout permanently dirty and blocked every
+# update that touched an install script.
+tracked_changes() {
+  local line path
+  git_repo status --porcelain --untracked-files=no \
+    | grep -v '^.. sounds/' \
+    | while IFS= read -r line; do
+        # porcelain lines are "XY path"; IFS= keeps the leading status
+        # column, without it read would strip it and shift the offset
+        path=${line:3}
+        if [ -n "$(git_repo diff HEAD --numstat -- "$path" 2>/dev/null \
+                   | grep -v '^0[[:space:]]0[[:space:]]')" ]; then
+          echo "$line"
+        fi
+      done
 }
 
 branch_name() {
