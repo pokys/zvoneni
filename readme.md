@@ -27,13 +27,19 @@ Zvonění je řízeno rozvrhem a přehrává zvuk přes 3.5mm jack.
 ## 🚀 Instalace
 
 ```bash
+sudo apt update && sudo apt install -y git
+
 cd /opt
-git clone https://github.com/pokys/zvoneni.git
+sudo git clone https://github.com/pokys/zvoneni.git
 cd zvoneni/install
-chmod +x *.sh
+sudo chmod +x *.sh
 sudo ./install.sh
-reboot
+sudo reboot
 ```
+
+`git` se instaluje zvlášť, protože bez něj neproběhne ani to klonování –
+na Raspberry Pi OS Lite předinstalovaný není. Instalátor si ho pak hlídá
+sám, protože ho potřebuje i aktualizace.
 
 Po rebootu systém **okamžitě běží**.
 
