@@ -54,7 +54,9 @@ Vše se spravuje přes TUI.
 - `ADMIN.md` – provoz a údržba
 - `schedule.txt` – rozvrh
 - `amp.conf` – nastavení zesilovače (spravuje se z TUI)
-- `/opt/zvoneni/sounds/` – zvuky (musí obsahovat alespoň jeden `.wav`)
+- `/opt/zvoneni/sounds/` – zvuky (musí obsahovat alespoň jeden `.wav`);
+  dodávané zvuky se sem kopírují z `install/sounds/` jen když chybí,
+  vlastní se nepřepisují
 - prázdný rozvrh se neaplikuje (ochrana proti vypnutí systému)
 
 ---

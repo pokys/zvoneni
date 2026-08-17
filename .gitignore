@@ -2,6 +2,12 @@
 
 # Runtime state created next to the checkout on the appliance.
 # The updater checks for local modifications, so these must not show up.
-schedule.txt
-amp.conf
-.update-previous
+# All anchored with a leading slash: an unanchored "sounds/" would also
+# match install/sounds/, silently ignoring the stock sounds we ship.
+/schedule.txt
+/amp.conf
+/.update-previous
+
+# The live sound library. Stock sounds ship in install/sounds and are
+# copied here only when missing, so custom bells survive an update.
+/sounds/

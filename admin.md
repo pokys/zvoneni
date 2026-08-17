@@ -254,9 +254,20 @@ Z příkazové řádky totéž: `zvoneni-update check | apply | rollback | statu
 
 ### Co update **nepřepíše**
 
-`schedule.txt` ani `amp.conf` – instalátor je zakládá jen tehdy, když chybí.
-Když nová verze přinese nové nastavení, updater ho do `amp.conf` **přidá
-s výchozí hodnotou** a stávající hodnoty nechá být.
+`schedule.txt`, `amp.conf` ani **zvuky** – instalátor je zakládá jen tehdy,
+když chybí. Když nová verze přinese nové nastavení, updater ho do `amp.conf`
+**přidá s výchozí hodnotou** a stávající hodnoty nechá být.
+
+U zvuků platí stejné pravidlo: dodávané zvuky leží v `install/sounds/` a do
+`/opt/zvoneni/sounds/` se kopírují **jen když tam chybí**. Vlastní `.wav`
+i vlastní verze `normal.wav` tedy update přežijí.
+
+Dva důsledky, které stojí za to znát:
+
+- Když **smažeš** dodávaný zvuk, při příštím updatu se vrátí. Nechceš-li ho
+  slyšet, prostě ho nepoužívej v rozvrhu.
+- Když se dodávaný zvuk upstream změní, k tobě se **nedostane**, protože
+  soubor u tebe existuje. Chceš-li novou verzi, smaž ten svůj a spusť update.
 
 ### ⚠️ Overlay FS musí být vypnutý
 

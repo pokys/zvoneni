@@ -17,6 +17,7 @@ REPO=/opt/zvoneni
 CONF="$REPO/amp.conf"
 STAMP="$REPO/.update-previous"
 SELF=/run/zvoneni-update.running
+SOUNDS_BAK=/run/zvoneni-sounds-stash
 
 # The installer rewrites /usr/local/bin/zvoneni-update while we are running
 # it, and bash reads a script by file offset - it would carry on in the
@@ -54,8 +55,11 @@ Turn it off first:
   fi
 
   # Untracked files are expected here: schedule.txt and amp.conf live in
-  # this directory without being part of the repository.
-  if [ -n "$(git_repo status --porcelain --untracked-files=no)" ]; then
+  # this directory without being part of the repository. sounds/ is skipped
+  # too - it is the live sound library, and older versions tracked it, so a
+  # school that replaced a stock bell would otherwise be locked out of
+  # updates for good.
+  if [ -n "$(git_repo status --porcelain --untracked-files=no | grep -v '^.. sounds/')" ]; then
     die "$REPO has local changes to tracked files - refusing to update.
 Look at them with:  git -C $REPO status"
   fi
@@ -75,6 +79,33 @@ branch_name() {
 fetch_remote() {
   say "Fetching from $(git_repo remote get-url origin 2>/dev/null || echo origin) ..."
   git_repo fetch --quiet origin 2>/dev/null || die "cannot reach the remote - is the network up?"
+}
+
+# The sound library sits inside the git working tree, and older versions
+# tracked it, so a checkout or a merge could refuse to run over a
+# customised bell - or quietly replace it. Move the library aside before
+# touching git and put it back afterwards. What is on the appliance always
+# wins; stock sounds only ever fill in what is missing.
+stash_sounds() {
+  [ -d "$REPO/sounds" ] || return 0
+
+  rm -rf "$SOUNDS_BAK"
+  mkdir -p "$SOUNDS_BAK" || return 0
+  cp -a "$REPO/sounds/." "$SOUNDS_BAK/" 2>/dev/null || true
+  rm -rf "$REPO/sounds"
+
+  # Put back whatever this commit tracks, so git sees an unmodified tree.
+  git_repo checkout -- sounds 2>/dev/null || true
+}
+
+restore_sounds() {
+  [ -d "$SOUNDS_BAK" ] || return 0
+
+  mkdir -p "$REPO/sounds"
+  cp -a "$SOUNDS_BAK/." "$REPO/sounds/" 2>/dev/null || true
+  rm -rf "$SOUNDS_BAK"
+
+  say "Sound library kept: $(find "$REPO/sounds" -name '*.wav' 2>/dev/null | wc -l) file(s)."
 }
 
 # Add settings introduced by the new version, keeping existing values.
@@ -102,8 +133,10 @@ run_install() {
   say ""
   say "Running the installer ..."
   bash "$REPO/install/install.sh" || die "the installer failed - the system may be half updated.
-Try 'zvoneni-update apply' again, or 'zvoneni-update rollback'."
+Try 'zvoneni-update apply' again, or 'zvoneni-update rollback'.
+Any stashed sounds are in $SOUNDS_BAK"
 
+  restore_sounds
   migrate_config
 
   # install.sh never runs the generator, so without this the old units stay
@@ -173,6 +206,7 @@ cmd_apply() {
   say ""
   say "Updating $br: $(git_repo rev-parse --short HEAD) -> $(git_repo rev-parse --short "origin/$br") ($count commit(s))"
 
+  stash_sounds
   git_repo checkout --quiet -B "$br" "$cur" || die "cannot switch to branch $br"
   git_repo merge --quiet --ff-only "origin/$br" || die "cannot fast-forward to origin/$br"
 
@@ -197,6 +231,7 @@ cmd_rollback() {
   fi
 
   say "Rolling back to: $(git_repo log -1 --format='%h %ad  %s' --date=short "$pc")"
+  stash_sounds
   git_repo checkout --quiet -B "${pb:-main}" "$pc" || die "cannot check out $pc"
 
   run_install
