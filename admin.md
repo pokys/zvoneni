@@ -234,6 +234,60 @@ Poznámky:
 
 ---
 
+## ⬆️ Aktualizace
+
+Systém se umí aktualizovat sám z GitHubu.
+
+```bash
+zvoneni-tui
+```
+→ `12 Update from GitHub`
+
+| Položka | Co dělá |
+|---|---|
+| Check for updates | `git fetch` a výpis nových commitů. Nic neinstaluje. |
+| Install update | Stáhne, spustí instalátor a přegeneruje timery. |
+| Roll back | Vrátí verzi, která běžela před posledním updatem. |
+| Installed version | Aktuální commit, větev a předchozí verze. |
+
+Z příkazové řádky totéž: `zvoneni-update check | apply | rollback | status`.
+
+### Co update **nepřepíše**
+
+`schedule.txt` ani `amp.conf` – instalátor je zakládá jen tehdy, když chybí.
+Když nová verze přinese nové nastavení, updater ho do `amp.conf` **přidá
+s výchozí hodnotou** a stávající hodnoty nechá být.
+
+### ⚠️ Overlay FS musí být vypnutý
+
+Se zapnutým overlay by update skončil v RAM a po rebootu by se tiše vrátil
+zpátky. Updater to pozná a **odmítne pokračovat**. Postup:
+
+1. `raspi-config` → Performance Options → Overlay File System → vypnout
+2. reboot
+3. update
+4. overlay zase zapnout
+5. reboot
+
+### Kdy update odmítne běžet
+
+- zapnutý overlay filesystem
+- lokální změny ve sledovaných souborech v `/opt/zvoneni` (`git status`)
+- nedostupná síť
+- `/opt/zvoneni` není git checkout (ruční instalace bez `git clone`)
+
+Nesledované soubory vedle checkoutu – tedy `schedule.txt` a `amp.conf` –
+update neblokují.
+
+### Poznámka k běhu
+
+Instalátor přepisuje i samotné TUI a updater. Proto se TUI před updatem
+ukončí, update proběhne v terminálu a menu se pak otevře znovu. Není to
+chyba, je to schválně – přepisovat skript pod běžícím shellem znamená, že
+bash začne vykonávat nový soubor od staré pozice.
+
+---
+
 ## 🧹 Factory reset timerů (nouzový postup)
 
 Použij jen pokud je systém rozbitý:

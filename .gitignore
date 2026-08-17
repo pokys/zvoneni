@@ -1,1 +1,7 @@
 .DS_Store
+
+# Runtime state created next to the checkout on the appliance.
+# The updater checks for local modifications, so these must not show up.
+schedule.txt
+amp.conf
+.update-previous

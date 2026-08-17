@@ -2,7 +2,7 @@
 set -e
 
 apt update
-apt install -y dialog alsa-utils nano
+apt install -y dialog alsa-utils nano git
 
 # pinctrl drives the amplifier GPIO. It ships with Raspberry Pi OS (Bookworm
 # and Trixie alike), so this is only a safety net for slimmed-down images.

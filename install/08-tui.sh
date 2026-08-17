@@ -398,6 +398,63 @@ amp_status_box() {
   rm -f "$TMP"
 }
 
+# ---------------- update ----------------
+
+update_check() {
+  TMP=$(mktemp)
+  dialog --infobox "Contacting GitHub ..." 5 40
+  zvoneni-update check > "$TMP" 2>&1
+  dialog --title "Update check" --textbox "$TMP" 24 92
+  rm -f "$TMP"
+}
+
+update_status() {
+  TMP=$(mktemp)
+  zvoneni-update status > "$TMP" 2>&1
+  dialog --title "Installed version" --textbox "$TMP" 16 86
+  rm -f "$TMP"
+}
+
+# The installer rewrites /usr/local/bin/zvoneni-tui, which is the script
+# running right now - bash would carry on reading the new file from the old
+# offset. exec away from the TUI first so nothing holds it open.
+update_run() {  # $1 = apply|rollback
+  clear
+  exec bash -c "zvoneni-update $1; echo; read -rp 'Press Enter to return to the menu... '; exec zvoneni-tui"
+}
+
+update_menu() {
+  local choice
+
+  while true; do
+    choice=$(dialog --clear --title "Update" --menu "
+Checks GitHub for a newer version and installs it.
+
+The schedule and the amplifier settings are kept; settings
+added by a new version get their defaults.
+" 20 70 5 \
+      1 "Check for updates" \
+      2 "Install update" \
+      3 "Roll back to the previous version" \
+      4 "Installed version" \
+      0 "Back" 3>&1 1>&2 2>&3) || return
+
+    case $choice in
+      1) update_check ;;
+      2)
+        dialog --yesno "Install the update now?\n\nThe menu closes, the update runs in the terminal, then the menu comes back.\n\nSchedule and settings are kept." 13 66 || continue
+        update_run apply
+        ;;
+      3)
+        dialog --yesno "Roll back to the version installed before the last update?" 8 62 || continue
+        update_run rollback
+        ;;
+      4) update_status ;;
+      0|"") return ;;
+    esac
+  done
+}
+
 amp_menu() {
   local choice
 
@@ -448,7 +505,7 @@ SYSTEM STATE: $STATE
 Time:        $TIME
 Clock gate:  $GATE
 Amplifier:   $AMP_INFO
-" 24 75 13 \
+" 25 75 14 \
     1 "Refresh status" \
     2 "Show active timers" \
     3 "System information" \
@@ -460,6 +517,7 @@ Amplifier:   $AMP_INFO
     9 "Debug" \
     10 "Help" \
     11 "Amplifier (GPIO switching)" \
+    12 "Update from GitHub" \
     0 "Exit" 3>&1 1>&2 2>&3)
 
   case $choice in
@@ -477,6 +535,7 @@ Amplifier:   $AMP_INFO
     9) show_debug ;;
     10) show_help ;;
     11) amp_menu ;;
+    12) update_menu ;;
     0) clear; exit ;;
   esac
 done
