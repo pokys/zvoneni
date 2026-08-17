@@ -114,6 +114,19 @@ fi
 
 # DAY HH:MM offset_seconds -> "DAY HH:MM:SS", borrowing into the previous
 # day when the pre-roll crosses midnight (Mon 00:00 -> Sun 23:59:50).
+# Removing a unit file is not enough: systemd keeps an already loaded unit
+# around in the not-found/failed state, where it clutters list-timers for
+# good. Clearing that state is a separate, explicit step.
+clear_orphan_units() {
+  local u
+  systemctl list-units --all --plain --no-legend 'zvoneni-*' 2>/dev/null \
+    | awk '$2 == "not-found" { print $1 }' \
+    | while read -r u; do
+        echo "[generator] clearing orphaned unit $u"
+        systemctl reset-failed "$u" 2>/dev/null || true
+      done
+}
+
 shift_time() {
   local day="$1" t="$2" off="$3" back=0 i
   local total=$(( 10#${t%%:*} * 3600 + 10#${t##*:} * 60 - off ))
@@ -221,6 +234,7 @@ shopt -u nullglob
 
 if [ "$CHANGED" -eq 0 ]; then
   echo "[generator] schedule unchanged – nothing written to disk"
+  clear_orphan_units
   systemctl start zvoneni.target
   echo "[generator] done"
   exit 0
@@ -235,7 +249,12 @@ systemctl stop zvoneni.target 2>/dev/null || true
 if [ ${#stale[@]} -gt 0 ]; then
   echo "[generator] removing ${#stale[@]} obsolete unit(s)"
   for f in "${stale[@]}"; do
-    rm -f "$f" "$WANTS_DIR/$(basename "$f")"
+    unit=$(basename "$f")
+    # Stop and disable while the file is still there, otherwise the unit
+    # survives as a not-found/failed leftover once the file is gone.
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl disable "$unit" 2>/dev/null || true
+    rm -f "$f" "$WANTS_DIR/$unit"
   done
 fi
 
@@ -251,6 +270,10 @@ echo "[generator] wrote $WRITTEN unit file(s)"
 
 echo "[generator] reloading systemd"
 systemctl daemon-reload
+
+# Also catches leftovers from earlier versions, which removed unit files
+# without ever stopping them.
+clear_orphan_units
 
 echo "[generator] enabling timers"
 for t in "${staged_timers[@]}"; do
@@ -301,17 +324,38 @@ if [ ${#units[@]} -eq 0 ]; then
   exit 0
 fi
 
-# NextElapseUSecRealtime is microseconds since the epoch, or 0/infinity
-# when the timer is not scheduled.
-BEST=$(systemctl show -p NextElapseUSecRealtime --value "${units[@]}" 2>/dev/null \
-       | grep -E '^[0-9]+$' | grep -v '^0$' | sort -n | head -n1)
+# systemd 257 prints this property as a human timestamp ("Mon 2026-08-24
+# 10:46:50 CEST"); older versions print raw microseconds. --timestamp=unix
+# does not affect it. Accept whatever comes.
+#
+# Careful with the rejects: `date -d ""` and `date -d 0` both succeed and
+# return today's midnight, so non-times have to be filtered before date
+# ever sees them.
+to_epoch() {
+  local v="$1"
+  case "$v" in
+    ''|0|n/a|infinity) return 1 ;;
+    @*)                v=${v#@}; [ -n "$v" ] || return 1; echo "$v" ;;
+    *[!0-9]*)          date -d "$v" +%s 2>/dev/null || return 1 ;;
+    *)                 echo $(( v / 1000000 )) ;;
+  esac
+}
+
+BEST=
+while IFS= read -r value; do
+  epoch=$(to_epoch "$value") || continue
+  [ -n "$epoch" ] || continue
+  if [ -z "$BEST" ] || [ "$epoch" -lt "$BEST" ]; then
+    BEST="$epoch"
+  fi
+done < <(systemctl show -p NextElapseUSecRealtime --value "${units[@]}" 2>/dev/null)
 
 if [ -z "$BEST" ]; then
   echo "-"
   exit 0
 fi
 
-WHEN=$(( BEST / 1000000 + PRE ))
+WHEN=$(( BEST + PRE ))
 LEFT=$(( WHEN - $(date +%s) ))
 
 if [ "$LEFT" -le 0 ]; then
