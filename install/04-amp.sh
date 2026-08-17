@@ -235,6 +235,18 @@ holder_count() {
 
 CMD="${1:-}"
 [ -n "$CMD" ] || usage
+
+# status/config only read; on/off/reset/test write to /run and the pin,
+# both root-owned once anything has run as root - which is how the TUI,
+# zvoneni-ring and the button daemon always call this. Without the check,
+# calling one of these by hand without sudo failed on a raw "Permission
+# denied" from the lock file, which pointed nowhere useful.
+case "$CMD" in
+  on|off|reset|test)
+    [ "$(id -u)" -eq 0 ] || { echo "zvoneni-amp: run as root, e.g. sudo zvoneni-amp $CMD" >&2; exit 1; }
+    ;;
+esac
+
 load_config
 
 case "$CMD" in
@@ -464,8 +476,13 @@ build_gpiomon() {
   local ver found
   ver=$(gpiomon --version 2>/dev/null | head -n1)
 
+  # Debian 13's libgpiod prints "gpiomon (libgpiod) v2.2.1" - note the "v"
+  # right before the number. A pattern anchored on "<space>2." misses that
+  # and falls through to the v1 branch, where gpiofind does not exist under
+  # v2 and build_gpiomon fails outright - reported as "gpiomon unavailable"
+  # even though it plainly is. Match the version loosely.
   case "$ver" in
-    *\ 2.*)
+    *\ v2.*|*\ 2.*)
       GPIOMON=(gpiomon --edges=both --bias="$BIAS" "GPIO$BUTTON_GPIO")
       ;;
     *)
