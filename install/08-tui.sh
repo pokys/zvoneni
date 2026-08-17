@@ -237,13 +237,50 @@ CLOCK GATE:
 - then allows bells even without internet
 - never blocks again
 
-DEBUG:
-Debug menu shows:
+MENU MAP:
+- Schedule:  timers, edit + apply schedule, test bell
+- Amplifier: GPIO switching, button, test, force off
+- System:    system info, start/stop, audio mixer, Debug
+- Update:    check / install / roll back from GitHub
+
+DEBUG (under System):
 - real timers on filesystem
 - systemd timers
 - last apply output
-- recent logs
+- amplifier state and recent logs
 " "$BH" "$BW"
+}
+
+show_admin_guide() {
+  if [ -f /opt/zvoneni/admin.md ]; then
+    box_size 90 90 24 80 200 200
+    dialog --title "Admin guide (/opt/zvoneni/admin.md)" --textbox /opt/zvoneni/admin.md "$BH" "$BW"
+  else
+    pause "admin.md not found in /opt/zvoneni"
+  fi
+}
+
+help_menu() {
+  local choice
+
+  while true; do
+    term_size
+    box_size 30 50 11 55 16 80
+
+    choice=$(dialog --clear --title "Help" --menu "
+Quick help explains the flow; the admin guide is the full
+documentation, always matching the installed version.
+" "$BH" "$BW" 3 \
+      1 "How the bell system works" \
+      2 "Admin guide (admin.md)" \
+      0 "Back" 3>&1 1>&2 2>&3) || return
+
+    case $choice in
+      1) show_help ;;
+      2) show_admin_guide ;;
+      0|"") return ;;
+    esac
+  done
 }
 
 toggle_system() {
@@ -606,7 +643,7 @@ schedule_menu() {
     NEXT_BELL=$(zvoneni-next-bell 2>/dev/null || echo "-")
     box_size 45 55 16 65 24 90
 
-    choice=$(dialog --clear --title "Rozvrh (Schedule)" --menu "
+    choice=$(dialog --clear --title "Schedule" --menu "
 Next bell: $NEXT_BELL
 
 Edit changes /opt/zvoneni/schedule.txt directly (nano).
@@ -642,25 +679,23 @@ system_menu() {
     get_status
     box_size 40 55 15 60 22 90
 
-    choice=$(dialog --clear --title "Systém (System)" --menu "
+    choice=$(dialog --clear --title "System" --menu "
 SYSTEM STATE: $STATE
 Clock gate:   $GATE
 IP address:   $IP
 Overlay FS:   $OVERLAY
-" "$BH" "$BW" 6 \
-      1 "Refresh status" \
-      2 "System information" \
-      3 "Toggle bell system (START/STOP)" \
-      4 "Audio mixer (alsamixer)" \
-      5 "Debug" \
+" "$BH" "$BW" 5 \
+      1 "System information" \
+      2 "Toggle bell system (START/STOP)" \
+      3 "Audio mixer (alsamixer)" \
+      4 "Debug" \
       0 "Back" 3>&1 1>&2 2>&3) || return
 
     case $choice in
-      1) : ;;
-      2) system_info ;;
-      3) toggle_system ;;
-      4) open_mixer ;;
-      5) show_debug ;;
+      1) system_info ;;
+      2) toggle_system ;;
+      3) open_mixer ;;
+      4) show_debug ;;
       0|"") return ;;
     esac
   done
@@ -680,20 +715,22 @@ while true; do
     --title "School Bell System" \
     --menu "
 $HEADER
-" "$BH" "$BW" 6 \
-    1 "Rozvrh (schedule)" \
-    2 "Zesilovač (amplifier)" \
-    3 "Systém (system)" \
-    4 "Aktualizace (update)" \
-    5 "Help" \
+" "$BH" "$BW" 7 \
+    1 "Refresh" \
+    2 "Schedule" \
+    3 "Amplifier" \
+    4 "System" \
+    5 "Update" \
+    6 "Help" \
     0 "Exit" 3>&1 1>&2 2>&3)
 
   case $choice in
-    1) schedule_menu ;;
-    2) amp_menu ;;
-    3) system_menu ;;
-    4) update_menu ;;
-    5) show_help ;;
+    1) : ;;
+    2) schedule_menu ;;
+    3) amp_menu ;;
+    4) system_menu ;;
+    5) update_menu ;;
+    6) help_menu ;;
     0) clear; exit ;;
   esac
 done

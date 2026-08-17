@@ -57,7 +57,7 @@ Vše se spravuje přes TUI – rozvrh, zvuky, zesilovač i aktualizace.
 
 ## ⬆️ Aktualizace
 
-TUI → `Aktualizace` → `Check for updates`.
+TUI → `Update` → `Check for updates`.
 
 Rozvrh, nastavení zesilovače ani vlastní zvuky se nepřepisují.
 Podrobnosti a omezení (nutnost vypnutého overlay FS) jsou v `admin.md`.
