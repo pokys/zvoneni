@@ -17,13 +17,37 @@ REPO=/opt/zvoneni
 CONF="$REPO/amp.conf"
 STAMP="$REPO/.update-previous"
 SELF=/run/zvoneni-update.running
-SOUNDS_BAK=/run/zvoneni-sounds-stash
+# The stash lives beside the checkout, not in /run: it must survive a
+# reboot that interrupts a half-finished update, and staying on the same
+# filesystem makes mv an atomic rename instead of a copy.
+SOUNDS_BAK="$REPO/.sounds-stash"
+# Written before git is touched, removed only after a successful install:
+# if the installer fails after the fast-forward, HEAD already matches the
+# remote and a plain re-apply would say "up to date" without ever
+# finishing the installation.
+INCOMPLETE="$REPO/.update-incomplete"
 
-# Fail here rather than deep inside a git operation half way through.
-if [ "$(id -u)" -ne 0 ]; then
-  echo "ERROR: run as root, e.g. sudo zvoneni-update ${1:-status}" >&2
-  exit 1
-fi
+CMD="${1:-}"
+
+# status only reads; everything else mutates root-owned state. The guard
+# sits after command parsing so `zvoneni-update status` (and the usage
+# text) stay usable without sudo.
+case "$CMD" in
+  check|apply|rollback)
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "ERROR: run as root, e.g. sudo zvoneni-update $CMD" >&2
+      exit 1
+    fi
+
+    # One updater at a time: concurrent runs would overwrite the staged
+    # copy mid-read and fight over the stash. The lock fd survives the
+    # exec below, so the relaunched copy keeps holding it.
+    if [ "${ZVONENI_UPDATE_RELAUNCHED:-0}" != "1" ]; then
+      exec 8>/run/zvoneni-update.lock
+      flock -n 8 || { echo "ERROR: another zvoneni-update is already running" >&2; exit 1; }
+    fi
+    ;;
+esac
 
 # The installer rewrites /usr/local/bin/zvoneni-update while we are running
 # it, and bash reads a script by file offset - it would carry on in the
@@ -31,8 +55,9 @@ fi
 #
 # The copy is handed to bash rather than executed directly: /run is often
 # mounted noexec, which blocks execve() no matter what the mode bits say.
-# Reading a script is not affected by that.
-if [ "${ZVONENI_UPDATE_RELAUNCHED:-0}" != "1" ]; then
+# Reading a script is not affected by that. status skips the staging - it
+# is read-only, quick, and must work without root (no /run writes).
+if [ "${ZVONENI_UPDATE_RELAUNCHED:-0}" != "1" ] && [ "$CMD" != "status" ] && [ -n "$CMD" ]; then
   if ! cp -f "$0" "$SELF" 2>/dev/null; then
     echo "ERROR: cannot stage the updater at $SELF" >&2
     exit 1
@@ -43,7 +68,9 @@ fi
 
 say() { echo "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
-git_repo() { git -C "$REPO" "$@"; }
+# safe.directory inline: a non-root `status` would otherwise trip git's
+# dubious-ownership check on the root-owned checkout.
+git_repo() { git -c safe.directory="$REPO" -C "$REPO" "$@"; }
 
 overlay_active() {
   findmnt -n -o FSTYPE / 2>/dev/null | grep -q overlay
@@ -83,18 +110,33 @@ Discard them with: git -C $REPO checkout -- ."
 # following them left the checkout permanently dirty and blocked every
 # update that touched an install script.
 tracked_changes() {
-  local line path
-  git_repo status --porcelain --untracked-files=no \
-    | grep -v '^.. sounds/' \
-    | while IFS= read -r line; do
-        # porcelain lines are "XY path"; IFS= keeps the leading status
-        # column, without it read would strip it and shift the offset
-        path=${line:3}
-        if [ -n "$(git_repo diff HEAD --numstat -- "$path" 2>/dev/null \
-                   | grep -v '^0[[:space:]]0[[:space:]]')" ]; then
-          echo "$line"
-        fi
-      done
+  local entry status path
+  # -z: NUL-delimited and unquoted. The line-based porcelain quotes paths
+  # with spaces ("name with spaces.txt" incl. the quotes), so the
+  # extracted path matched nothing, the content diff came back empty and
+  # a real modification was misread as mode-only. Renames emit a second
+  # NUL-terminated field (the origin path) - swallowed below.
+  while IFS= read -r -d '' entry; do
+    status=${entry:0:2}
+    path=${entry:3}
+
+    # rename/copy: consume the origin-path field and treat as a content
+    # change outright - it is never a mode-only difference.
+    case "$status" in
+      *R*|*C*)
+        IFS= read -r -d '' _ || true
+        printf '%s\n' "$entry"
+        continue
+        ;;
+    esac
+
+    case "$path" in sounds/*) continue ;; esac
+
+    if [ -n "$(git_repo diff HEAD --numstat -- "$path" 2>/dev/null \
+               | grep -v '^0[[:space:]]0[[:space:]]')" ]; then
+      printf '%s\n' "$entry"
+    fi
+  done < <(git_repo status --porcelain -z --untracked-files=no)
 }
 
 branch_name() {
@@ -110,7 +152,10 @@ branch_name() {
 
 fetch_remote() {
   say "Fetching from $(git_repo remote get-url origin 2>/dev/null || echo origin) ..."
-  git_repo fetch --quiet origin 2>/dev/null || die "cannot reach the remote - is the network up?"
+  # --prune: without it a branch deleted upstream keeps its stale
+  # remote-tracking ref here, and rev-parse origin/BRANCH would carry on
+  # succeeding against a commit that no longer exists upstream.
+  git_repo fetch --quiet --prune origin 2>/dev/null || die "cannot reach the remote - is the network up?"
 }
 
 # The sound library sits inside the git working tree, and older versions
@@ -118,13 +163,31 @@ fetch_remote() {
 # customised bell - or quietly replace it. Move the library aside before
 # touching git and put it back afterwards. What is on the appliance always
 # wins; stock sounds only ever fill in what is missing.
+#
+# The library is the school's own recordings - the one thing an update
+# must never lose. Hence: mv (atomic rename, same filesystem, no
+# copy-then-delete window), a stash that survives reboots, recovery of a
+# stash left by an interrupted earlier run, and on restore failure the
+# stash stays on disk rather than being cleaned up.
 stash_sounds() {
+  # An existing stash means an earlier run was interrupted between stash
+  # and restore. Never discard it - fold it into the live library first
+  # (live files win, the stash only fills gaps), then stash the result.
+  if [ -d "$SOUNDS_BAK" ]; then
+    say "Recovering sound stash from an interrupted update ..."
+    mkdir -p "$REPO/sounds"
+    local f base
+    for f in "$SOUNDS_BAK"/*; do
+      [ -e "$f" ] || continue
+      base=$(basename "$f")
+      [ -e "$REPO/sounds/$base" ] || mv "$f" "$REPO/sounds/$base" || die "cannot recover $base from $SOUNDS_BAK"
+    done
+    rm -rf "$SOUNDS_BAK"
+  fi
+
   [ -d "$REPO/sounds" ] || return 0
 
-  rm -rf "$SOUNDS_BAK"
-  mkdir -p "$SOUNDS_BAK" || return 0
-  cp -a "$REPO/sounds/." "$SOUNDS_BAK/" 2>/dev/null || true
-  rm -rf "$REPO/sounds"
+  mv "$REPO/sounds" "$SOUNDS_BAK" || die "cannot stash the sound library (mv to $SOUNDS_BAK failed)"
 
   # Put back whatever this commit tracks, so git sees an unmodified tree.
   git_repo checkout -- sounds 2>/dev/null || true
@@ -133,9 +196,22 @@ stash_sounds() {
 restore_sounds() {
   [ -d "$SOUNDS_BAK" ] || return 0
 
-  mkdir -p "$REPO/sounds"
-  cp -a "$SOUNDS_BAK/." "$REPO/sounds/" 2>/dev/null || true
-  rm -rf "$SOUNDS_BAK"
+  mkdir -p "$REPO/sounds" || die "cannot recreate $REPO/sounds - your sounds are safe in $SOUNDS_BAK"
+
+  # Per-file move, appliance copy wins over freshly checked-out stock.
+  local f base fail=0
+  for f in "$SOUNDS_BAK"/*; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    rm -f "$REPO/sounds/$base"
+    mv "$f" "$REPO/sounds/$base" || fail=1
+  done
+
+  if [ "$fail" -ne 0 ]; then
+    say "WARNING: some sounds could not be restored - they remain in $SOUNDS_BAK"
+  else
+    rm -rf "$SOUNDS_BAK"
+  fi
 
   say "Sound library kept: $(find "$REPO/sounds" -name '*.wav' 2>/dev/null | wc -l) file(s)."
 }
@@ -176,6 +252,8 @@ Any stashed sounds are in $SOUNDS_BAK"
   say ""
   say "Regenerating timers ..."
   /usr/local/bin/generate-timers.sh || say "WARNING: generate-timers.sh failed - check the schedule"
+
+  rm -f "$INCOMPLETE"
 
   say ""
   say "Done. Now running: $(git_repo log -1 --format='%h %s')"
@@ -225,6 +303,16 @@ cmd_apply() {
   rem=$(git_repo rev-parse "origin/$br" 2>/dev/null) || die "the remote has no branch '$br'"
 
   if [ "$cur" = "$rem" ]; then
+    # An incomplete marker with HEAD already at the remote means a
+    # previous apply fast-forwarded and then failed in the installer.
+    # Without this, the recommended "run apply again" would report
+    # "up to date" and never finish the installation.
+    if [ -f "$INCOMPLETE" ]; then
+      say ""
+      say "A previous update did not finish installing - resuming."
+      run_install
+      return 0
+    fi
     say ""
     say "Already up to date - nothing to do."
     return 0
@@ -234,6 +322,7 @@ cmd_apply() {
   [ "$count" -gt 0 ] || die "the local checkout has diverged from origin/$br - resolve it by hand"
 
   printf 'PREV_BRANCH=%s\nPREV_COMMIT=%s\n' "$br" "$cur" > "$STAMP"
+  printf 'TARGET=%s\n' "$rem" > "$INCOMPLETE"
 
   say ""
   say "Updating $br: $(git_repo rev-parse --short HEAD) -> $(git_repo rev-parse --short "origin/$br") ($count commit(s))"
@@ -258,11 +347,17 @@ cmd_rollback() {
   git_repo cat-file -e "${pc}^{commit}" 2>/dev/null || die "commit $pc is no longer in the repository"
 
   if [ "$(git_repo rev-parse HEAD)" = "$pc" ]; then
+    if [ -f "$INCOMPLETE" ]; then
+      say "A previous rollback did not finish installing - resuming."
+      run_install
+      return 0
+    fi
     say "Already running the recorded previous version - nothing to do."
     return 0
   fi
 
   say "Rolling back to: $(git_repo log -1 --format='%h %ad  %s' --date=short "$pc")"
+  printf 'TARGET=%s\n' "$pc" > "$INCOMPLETE"
   stash_sounds
   git_repo checkout --quiet -B "${pb:-main}" "$pc" || die "cannot check out $pc"
 
@@ -276,6 +371,12 @@ cmd_status() {
   echo "Remote:      $(git_repo remote get-url origin 2>/dev/null || echo '-')"
   echo "Branch:      $(branch_name)"
   echo "Installed:   $(git_repo log -1 --format='%h %ad  %s' --date=short)"
+
+  if [ -f "$INCOMPLETE" ]; then
+    echo
+    echo "WARNING: the last update/rollback did not finish installing."
+    echo "Run 'sudo zvoneni-update apply' to resume."
+  fi
 
   if [ -f "$STAMP" ]; then
     local pc

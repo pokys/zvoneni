@@ -72,7 +72,9 @@ pause() {
 # position. exec cleanly restarts, reading the current file from the top.
 run_and_return() {  # $* = the command to run
   clear
-  exec bash -c "$* ; echo; read -rp 'Press Enter to return to the menu... '; exec zvoneni-tui"
+  # Callers pass literal command strings only - never user input; the
+  # restart uses an absolute path so it cannot be hijacked via PATH.
+  exec bash -c "$* ; echo; read -rp 'Press Enter to return to the menu... '; exec /usr/local/bin/zvoneni-tui"
 }
 
 AMP_CONF=/opt/zvoneni/amp.conf

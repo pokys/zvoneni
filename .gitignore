@@ -7,6 +7,8 @@
 /schedule.txt
 /amp.conf
 /.update-previous
+/.update-incomplete
+/.sounds-stash/
 
 # The live sound library. Stock sounds ship in install/sounds and are
 # copied here only when missing, so custom bells survive an update.
