@@ -133,26 +133,38 @@ load_config() {
 have_pinctrl() { command -v pinctrl >/dev/null 2>&1; }
 
 amp_write() {  # 1 = amplifier on, 0 = amplifier off
-  local want="$1" level
+  local want="$1" level gpio="$AMP_GPIO" ah="$AMP_ACTIVE_HIGH"
 
-  if [ "$AMP_ACTIVE_HIGH" -eq 1 ]; then
+  # Switching OFF must undo the exact switch-on: if the admin changes
+  # AMP_GPIO or the polarity while the amplifier is energised, releasing
+  # with the NEW config would drive the wrong pin (or the wrong level)
+  # and leave the old pin stuck on. The marker therefore records which
+  # pin and polarity were used to switch on, and OFF replays those. All
+  # of this runs under the flock every caller already holds.
+  if [ "$want" -eq 0 ] && [ -s "$OWNED" ]; then
+    read -r gpio ah < "$OWNED" 2>/dev/null || { gpio="$AMP_GPIO"; ah="$AMP_ACTIVE_HIGH"; }
+    [[ "$gpio" =~ ^[0-9]+$ ]] || gpio="$AMP_GPIO"
+    [[ "$ah"   =~ ^[01]$   ]] || ah="$AMP_ACTIVE_HIGH"
+  fi
+
+  if [ "$ah" -eq 1 ]; then
     [ "$want" -eq 1 ] && level=dh || level=dl
   else
     [ "$want" -eq 1 ] && level=dl || level=dh
   fi
 
   if ! have_pinctrl; then
-    log "pinctrl not found - cannot drive GPIO $AMP_GPIO (install raspi-utils)"
+    log "pinctrl not found - cannot drive GPIO $gpio (install raspi-utils)"
     return 1
   fi
 
-  if ! pinctrl set "$AMP_GPIO" op "$level" 2>/dev/null; then
-    log "pinctrl set $AMP_GPIO op $level failed"
+  if ! pinctrl set "$gpio" op "$level" 2>/dev/null; then
+    log "pinctrl set $gpio op $level failed"
     return 1
   fi
 
   if [ "$want" -eq 1 ]; then
-    touch "$OWNED"
+    printf '%s %s\n' "$gpio" "$ah" > "$OWNED"
   else
     rm -f "$OWNED"
   fi
@@ -338,12 +350,15 @@ AMP=/usr/local/bin/zvoneni-amp
 TYPE="${1:-}"
 
 if [ -z "$TYPE" ]; then
-  echo "usage: zvoneni-ring <sound>" >&2
+  echo "usage: zvoneni-ring <sound> [holder]" >&2
   exit 2
 fi
 
 SOUND="/opt/zvoneni/sounds/${TYPE}.wav"
-HOLDER="ring-${TYPE}"
+# Generated per-slot units pass their own holder (ring-Mon-0800) so two
+# overlapping bells of the same sound each hold the amplifier separately;
+# the default keeps manual `zvoneni-ring normal` working as before.
+HOLDER="${2:-ring-${TYPE}}"
 
 # Single source of truth for defaults and validation lives in zvoneni-amp.
 AMP_ENABLED=0
@@ -438,7 +453,11 @@ release() { "$AMP" off "$HOLDER" >/dev/null 2>&1 || true; }
 trap release EXIT
 trap 'exit 143' INT TERM
 
-STATE=0
+# -2 = unknown, so the very first successful read always syncs the
+# holder. Starting at 0 meant a daemon restarted after SIGKILL (EXIT trap
+# never ran, holder file left behind) saw "released == released" and
+# never called off - the stale holder kept the amplifier on forever.
+STATE=-2
 
 read_button() {  # 1 = pressed, 0 = released, -1 = unreadable
   local out lvl
@@ -551,6 +570,10 @@ After=zvoneni-amp-reset.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/zvoneni-amp-button
+# Belt and braces to the daemon's own EXIT trap: covers SIGKILL, where no
+# trap runs and the button holder would otherwise be left keeping the
+# amplifier on until reboot.
+ExecStopPost=/usr/local/bin/zvoneni-amp off button
 # A clean exit means the button is switched off in amp.conf, which is not
 # a failure and must not be retried in a loop.
 Restart=on-failure
