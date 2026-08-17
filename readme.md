@@ -1,4 +1,3 @@
-```md
 # School Bell System (Zvoneni)
 
 Školní zvonění jako appliance na Raspberry Pi.  
@@ -31,9 +30,7 @@ sudo apt update && sudo apt install -y git
 
 cd /opt
 sudo git clone https://github.com/pokys/zvoneni.git
-cd zvoneni/install
-sudo chmod +x *.sh
-sudo ./install.sh
+sudo bash /opt/zvoneni/install/install.sh
 sudo reboot
 ```
 
@@ -48,16 +45,25 @@ Po rebootu systém **okamžitě běží**.
 ## 🖥️ Ovládání
 
 ```bash
-zvoneni-tui
+sudo zvoneni-tui
 ```
 
-Vše se spravuje přes TUI.
+Vše se spravuje přes TUI – rozvrh, zvuky, zesilovač i aktualizace.
+
+---
+
+## ⬆️ Aktualizace
+
+TUI → `12 Update from GitHub` → `Check for updates`.
+
+Rozvrh, nastavení zesilovače ani vlastní zvuky se nepřepisují.
+Podrobnosti a omezení (nutnost vypnutého overlay FS) jsou v `admin.md`.
 
 ---
 
 ## 📄 Dokumentace
 
-- `ADMIN.md` – provoz a údržba
+- `admin.md` – provoz a údržba
 - `schedule.txt` – rozvrh
 - `amp.conf` – nastavení zesilovače (spravuje se z TUI)
 - `/opt/zvoneni/sounds/` – zvuky (musí obsahovat alespoň jeden `.wav`);
@@ -73,4 +79,3 @@ Tento systém je navržen jako appliance:
 - zapojíš → funguje
 - reboot → funguje
 - výpadek proudu → funguje
-```
