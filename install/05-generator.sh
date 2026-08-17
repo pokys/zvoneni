@@ -20,7 +20,10 @@ SOUNDS_DIR="/opt/zvoneni/sounds"
 # ------------------------------------------------------------
 echo "[generator] validating schedule"
 
-DAYS="Mon Tue Wed Thu Fri"
+# The full week, deliberately - not a leftover of a weekday-only design.
+# Everything downstream (shift_time's day array, the unit name glob,
+# OnCalendar itself) already handles Sat/Sun; this was the only gate.
+DAYS="Mon Tue Wed Thu Fri Sat Sun"
 ERROR=0
 VALID_COUNT=0
 lineno=0

@@ -22,5 +22,6 @@ done
 
 [ -f /opt/zvoneni/schedule.txt ] || cat > /opt/zvoneni/schedule.txt <<EOF
 # DAY TIME TYPE
+# DAY = Mon Tue Wed Thu Fri Sat Sun
 Mon 08:00 normal
 EOF

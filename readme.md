@@ -10,6 +10,7 @@ Zvonění je řízeno rozvrhem a přehrává zvuk přes 3.5mm jack.
 ## ✨ Vlastnosti
 
 - systemd timers (žádný cron)
+- rozvrh pokrývá celý týden včetně soboty a neděle
 - volitelné spínání zesilovače přes GPIO (zapne před zvoněním, vypne po něm)
 - volitelné tlačítko, které po dobu stisku drží zesilovač zapnutý
 - aktualizace z GitHubu přímo z TUI, včetně návratu na předchozí verzi

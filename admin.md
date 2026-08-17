@@ -51,6 +51,9 @@ V TUI můžeš:
 
 ## 📝 Změna rozvrhu
 
+Formát řádky: `DAY TIME TYPE`, kde `DAY` je `Mon`–`Sun` (celý týden včetně
+víkendu), `TIME` je `HH:MM` a `TYPE` je jméno zvuku bez přípony `.wav`.
+
 ### Doporučený postup
 1. `zvoneni-tui`
 2. Edit schedule
