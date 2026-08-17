@@ -44,6 +44,12 @@ set -uo pipefail
 CONF=/opt/zvoneni/amp.conf
 STATE_DIR=/run/zvoneni-amp
 LOCK=/run/zvoneni-amp.lock
+# Set while the pin is energised by us. Without it, switching the feature
+# off mid-ring would strand the amplifier on: the release would bail out
+# on AMP_ENABLED=0 and nothing, not even `reset`, could bring it down.
+# Lives outside STATE_DIR so it does not count as a holder, and in /run so
+# a reboot clears it and the boot failsafe leaves foreign pins alone.
+OWNED=/run/zvoneni-amp.owned
 
 log() { echo "zvoneni-amp: $*" >&2; }
 
@@ -118,7 +124,21 @@ amp_write() {  # 1 = amplifier on, 0 = amplifier off
     log "pinctrl set $AMP_GPIO op $level failed"
     return 1
   fi
+
+  if [ "$want" -eq 1 ]; then
+    touch "$OWNED"
+  else
+    rm -f "$OWNED"
+  fi
 }
+
+# True once we have energised the pin and not yet brought it down.
+amp_owned() { [ -e "$OWNED" ]; }
+
+# Releasing and resetting must work even after the feature has been
+# switched off, otherwise the amplifier stays on for good. When we never
+# touched the pin, stay away from it - it may serve something else now.
+may_touch_pin() { [ "$AMP_ENABLED" -eq 1 ] || amp_owned; }
 
 pin_state() {
   if ! have_pinctrl; then
@@ -126,8 +146,17 @@ pin_state() {
     return
   fi
 
-  local out level
+  local out mode level
   out=$(pinctrl get "$AMP_GPIO" 2>/dev/null) || { echo "unknown"; return; }
+
+  # An input pin still reports a level, but it is whatever the outside
+  # world puts on it - claiming ON/OFF for a pin we do not drive is a lie.
+  mode=$(echo "$out" | grep -o -E '\b(ip|op)\b' | head -n1)
+  if [ "$mode" != "op" ]; then
+    echo "not driven ($out)"
+    return
+  fi
+
   level=$(echo "$out" | grep -o -E '\b(dh|dl|hi|lo)\b' | head -n1)
 
   case "$level" in
@@ -172,7 +201,7 @@ case "$CMD" in
 
   off)
     [ $# -ge 2 ] || usage
-    [ "$AMP_ENABLED" -eq 1 ] || exit 0
+    may_touch_pin || exit 0
     HOLDER=$(clean_holder "$2")
     take_lock || exit 1
     rm -f "$STATE_DIR/$HOLDER"
@@ -182,7 +211,7 @@ case "$CMD" in
     ;;
 
   reset)
-    [ "$AMP_ENABLED" -eq 1 ] || exit 0
+    may_touch_pin || exit 0
     take_lock || exit 1
     rm -f "$STATE_DIR"/*
     amp_write 0
@@ -203,6 +232,7 @@ case "$CMD" in
     echo "pre-roll:     ${AMP_PRE_SECONDS}s before the bell"
     echo "post-roll:    ${AMP_POST_SECONDS}s after the sound ends"
     echo "amplifier:    $(pin_state)"
+    echo "driven by us: $(amp_owned && echo yes || echo no)"
     echo "holders:      $(holder_count)"
     if [ -d "$STATE_DIR" ]; then
       find "$STATE_DIR" -maxdepth 1 -type f -printf '  - %f\n' 2>/dev/null
