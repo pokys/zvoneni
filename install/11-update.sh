@@ -19,16 +19,26 @@ STAMP="$REPO/.update-previous"
 SELF=/run/zvoneni-update.running
 SOUNDS_BAK=/run/zvoneni-sounds-stash
 
+# Fail here rather than deep inside a git operation half way through.
+if [ "$(id -u)" -ne 0 ]; then
+  echo "ERROR: run as root, e.g. sudo zvoneni-update ${1:-status}" >&2
+  exit 1
+fi
+
 # The installer rewrites /usr/local/bin/zvoneni-update while we are running
 # it, and bash reads a script by file offset - it would carry on in the
 # middle of the new file. Run from a copy in /run instead.
+#
+# The copy is handed to bash rather than executed directly: /run is often
+# mounted noexec, which blocks execve() no matter what the mode bits say.
+# Reading a script is not affected by that.
 if [ "${ZVONENI_UPDATE_RELAUNCHED:-0}" != "1" ]; then
-  if ! cp -f "$0" "$SELF" 2>/dev/null || ! chmod +x "$SELF"; then
-    echo "ERROR: cannot stage the updater in /run" >&2
+  if ! cp -f "$0" "$SELF" 2>/dev/null; then
+    echo "ERROR: cannot stage the updater at $SELF" >&2
     exit 1
   fi
   export ZVONENI_UPDATE_RELAUNCHED=1
-  exec "$SELF" "$@"
+  exec bash "$SELF" "$@"
 fi
 
 say() { echo "$*"; }
