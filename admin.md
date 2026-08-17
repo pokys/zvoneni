@@ -66,6 +66,12 @@ nano /opt/zvoneni/schedule.txt
 generate-timers.sh
 ```
 
+**Zameškané zvonění se přeskočí, nezvoní pozdě.** Ať už kvůli výpadku
+proudu, nebo protože se rozvrh/zesilovač upraví až po tom, co dnešní
+zvonění mělo proběhnout — příští spuštění zvoní podle nejbližšího dalšího
+slotu, ne dodatečně to, co uteklo. Prostředku hodiny by zpožděné zvonění
+spíš zmátlo, než pomohlo.
+
 ---
 
 ## 🔔 Test zvuku

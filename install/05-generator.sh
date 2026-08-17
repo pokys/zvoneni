@@ -155,6 +155,17 @@ shift_time() {
 # card when they actually differ from what is already installed. The
 # generator runs on every boot, so unconditional rewrites would burn the
 # card for nothing.
+#
+# The timers below do NOT set Persistent=true, on purpose. That directive
+# makes systemd fire a timer immediately if it judges the current week's
+# slot already elapsed - and that check re-runs whenever the unit's
+# OnCalendar is reloaded, not only after a real power outage. Changing
+# ANY amplifier setting recomputes OnCalendar for every bell (the pre-roll
+# shifts them all), so saving a setting after today's bell had already
+# rung made it ring again right there in the TUI. A school bell that is
+# late should be skipped, not rung out of context mid-lesson, so this
+# stays off rather than trying to distinguish "missed by an outage" from
+# "moved by an edit".
 echo "[generator] generating timers"
 
 STAGE=$(mktemp -d /run/zvoneni-gen.XXXXXX)
@@ -185,7 +196,8 @@ Description=Timer for ${UNIT} (fires ${CAL}, pre-roll ${PRE}s)
 [Timer]
 OnCalendar=${CAL}
 AccuracySec=1s
-Persistent=true
+# No Persistent=true - a missed bell is skipped, not rung late. See
+# 05-generator.sh for why.
 
 [Install]
 WantedBy=zvoneni.target
