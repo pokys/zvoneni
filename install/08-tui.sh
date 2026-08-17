@@ -169,7 +169,8 @@ Debug menu shows:
 
 toggle_system() {
   if [ "$STATE" = "RUNNING" ]; then
-    dialog --yesno "Stop bell system?" 7 40 || return
+    dialog --yes-label "Yes, stop" --no-label "Cancel" \
+      --yesno "Stop bell system?" 7 40 || return
     systemctl stop zvoneni.target
     pause "Bell system STOPPED"
   else
@@ -442,11 +443,13 @@ added by a new version get their defaults.
     case $choice in
       1) update_check ;;
       2)
-        dialog --yesno "Install the update now?\n\nThe menu closes, the update runs in the terminal, then the menu comes back.\n\nSchedule and settings are kept." 13 66 || continue
+        dialog --yes-label "Yes, install" --no-label "Cancel" \
+          --yesno "Install the update now?\n\nThe menu closes, the update runs in the terminal, then the menu comes back.\n\nSchedule and settings are kept." 13 66 || continue
         update_run apply
         ;;
       3)
-        dialog --yesno "Roll back to the version installed before the last update?" 8 62 || continue
+        dialog --yes-label "Yes, roll back" --no-label "Cancel" \
+          --yesno "Roll back to the version installed before the last update?" 8 62 || continue
         update_run rollback
         ;;
       4) update_status ;;
@@ -486,6 +489,8 @@ The button keeps the amplifier on while it is held down.
       5) button_form ;;
       6) amp_status_box ;;
       7)
+        dialog --yes-label "Yes, force off" --no-label "Cancel" \
+          --yesno "Force the amplifier OFF now?\n\nThis drops any bell or button currently holding it on." 10 62 || continue
         zvoneni-amp reset >/dev/null 2>&1
         pause "Amplifier forced OFF."
         ;;
@@ -526,7 +531,8 @@ Amplifier:   $AMP_INFO
     3) system_info ;;
     4) nano /opt/zvoneni/schedule.txt ;;
     5)
-      dialog --yesno "Apply new schedule?" 7 40 || continue
+      dialog --yes-label "Yes, apply" --no-label "Cancel" \
+        --yesno "Apply new schedule?" 7 40 || continue
       apply_schedule
       ;;
     6) test_sound ;;
