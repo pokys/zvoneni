@@ -14,6 +14,8 @@ Zvonění je řízeno rozvrhem a přehrává zvuk přes 3.5mm jack.
 - volitelné spínání zesilovače přes GPIO (zapne před zvoněním, vypne po něm)
 - volitelné tlačítko, které po dobu stisku drží zesilovač zapnutý
 - aktualizace z GitHubu přímo z TUI, včetně návratu na předchozí verzi
+- přehled stavu hned na úvodní obrazovce (další zvonění, IP, overlay FS,
+  zesilovač, tlačítko) a velikost oken podle skutečného displeje
 - automatický start po bootu
 - ochrana proti špatnému času (NTP gate) – platí pro ruční i plánované zvonění
 - tolerantní NTP gate (po bootu čeká, pak pustí zvonění i bez internetu)
@@ -55,7 +57,7 @@ Vše se spravuje přes TUI – rozvrh, zvuky, zesilovač i aktualizace.
 
 ## ⬆️ Aktualizace
 
-TUI → `12 Update from GitHub` → `Check for updates`.
+TUI → `Aktualizace` → `Check for updates`.
 
 Rozvrh, nastavení zesilovače ani vlastní zvuky se nepřepisují.
 Podrobnosti a omezení (nutnost vypnutého overlay FS) jsou v `admin.md`.

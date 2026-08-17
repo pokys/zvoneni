@@ -6,8 +6,64 @@ echo "[install] installing TUI"
 cat > /usr/local/bin/zvoneni-tui <<'EOF'
 #!/bin/bash
 
+# ---------------- terminal-aware sizing ----------------
+
+# Prefer stty (reads the tty ioctl directly, works even if TERM is unset
+# or wrong); tput as fallback; a hardcoded 80x24 as a last resort so a
+# detached/non-interactive run never breaks the arithmetic below.
+term_size() {
+  local rc
+  rc=$(stty size 2>/dev/null) || rc=""
+  if [ -n "$rc" ]; then
+    read -r TERM_LINES TERM_COLS <<< "$rc"
+  else
+    TERM_LINES=$(tput lines 2>/dev/null)
+    TERM_COLS=$(tput cols 2>/dev/null)
+  fi
+  [[ "$TERM_LINES" =~ ^[0-9]+$ ]] || TERM_LINES=24
+  [[ "$TERM_COLS"  =~ ^[0-9]+$ ]] || TERM_COLS=80
+}
+
+# box_size <h_pct> <w_pct> <h_min> <w_min> <h_max> <w_max>
+# Percent-of-terminal box size, clamped to [min,max] and then to the
+# terminal itself (leaves a small margin). Sets BH/BW.
+#
+# Deliberately not dialog's own "0 0" auto-size: that fits tightly to
+# content only and can't be told to fill more of a big console - on the
+# appliance's physical 1920x1080 / 240x67-character console, fixed small
+# boxes render as a tiny island on a sea of black. Explicit computed and
+# clamped sizing (same idea raspi-config uses) fixes that while still
+# fitting a small SSH window.
+box_size() {
+  local hp=$1 wp=$2 hmin=$3 wmin=$4 hmax=$5 wmax=$6
+  BH=$(( TERM_LINES * hp / 100 ))
+  BW=$(( TERM_COLS  * wp / 100 ))
+  (( BH < hmin )) && BH=$hmin
+  (( BW < wmin )) && BW=$wmin
+  (( BH > hmax )) && BH=$hmax
+  (( BW > wmax )) && BW=$wmax
+  (( BH > TERM_LINES - 1 )) && BH=$(( TERM_LINES - 1 ))
+  (( BW > TERM_COLS  - 2 )) && BW=$(( TERM_COLS  - 2 ))
+}
+
 pause() {
-  dialog --msgbox "$1" 8 70
+  box_size 20 55 8 55 14 80
+  dialog --msgbox "$1" "$BH" "$BW"
+}
+
+# Run a command with its raw output visible directly in the terminal (not
+# inside a dialog box), then wait for Enter and return to the menu. For
+# anything whose output is worth watching live - a schedule apply, an
+# update - rather than summarized afterward in a --textbox.
+#
+# exec, not just `bash -c '...'; zvoneni-tui`: the installer can rewrite
+# this very script (/usr/local/bin/zvoneni-tui) while it is running - e.g.
+# during an update - and bash reads a running script by file offset, so
+# continuing without exec would resume reading the OLD file from a stale
+# position. exec cleanly restarts, reading the current file from the top.
+run_and_return() {  # $* = the command to run
+  clear
+  exec bash -c "$* ; echo; read -rp 'Press Enter to return to the menu... '; exec zvoneni-tui"
 }
 
 AMP_CONF=/opt/zvoneni/amp.conf
@@ -43,22 +99,41 @@ amp_summary() {
   fi
 }
 
+# Same one-liner as overlay_active() in install/11-update.sh - kept
+# duplicated rather than shared, since this file is a standalone script
+# with no include mechanism.
+overlay_active() {
+  findmnt -n -o FSTYPE / 2>/dev/null | grep -q overlay
+}
+
+# Single source of truth for the dashboard header shown at the top of the
+# main menu. Runs on every main-loop iteration, so it is never stale.
 get_status() {
+  term_size
   TIME=$(date '+%Y-%m-%d %H:%M:%S')
   GATE=$([ -f /run/clock-ok ] && echo OK || echo WAIT)
   systemctl is-active zvoneni.target >/dev/null 2>&1 && STATE="RUNNING" || STATE="STOPPED"
+  OVERLAY=$(overlay_active && echo ON || echo OFF)
+
+  IP=$(ip -4 a 2>/dev/null | awk '/scope global/ {print $2}' | cut -d/ -f1 | head -1)
+  [ -z "$IP" ] && IP="(none)"
+
+  NEXT_BELL=$(zvoneni-next-bell 2>/dev/null || echo "-")
   amp_summary
+
+  HEADER="SYSTEM STATE: $STATE
+Next bell:    $NEXT_BELL
+
+Time:         $TIME
+Clock gate:   $GATE
+IP address:   $IP
+Overlay FS:   $OVERLAY
+Amplifier:    $AMP_INFO
+Button:       $BTN_INFO"
 }
 
 apply_schedule() {
-  generate-timers.sh 2>&1 | tee /run/zvoneni-last-apply.log
-  RC=${PIPESTATUS[0]}
-
-  if [ $RC -ne 0 ]; then
-    dialog --title "Schedule error" --textbox /run/zvoneni-last-apply.log 25 80
-  else
-    dialog --title "Schedule applied" --textbox /run/zvoneni-last-apply.log 25 80
-  fi
+  run_and_return "generate-timers.sh 2>&1 | tee /run/zvoneni-last-apply.log"
 }
 
 show_timers() {
@@ -78,7 +153,8 @@ show_timers() {
     systemctl list-timers --all --no-pager | grep -i zvoneni || echo "(none)"
   } > "$TMP"
 
-  dialog --title "Active timers (systemctl list-timers)" --textbox "$TMP" 25 100
+  box_size 80 90 20 80 200 200
+  dialog --title "Active timers (systemctl list-timers)" --textbox "$TMP" "$BH" "$BW"
   rm -f "$TMP"
 }
 
@@ -96,7 +172,8 @@ system_info() {
     ip -4 a | grep "scope global"
   } > "$TMP"
 
-  dialog --title "System information" --textbox "$TMP" 22 80
+  box_size 75 85 18 70 200 200
+  dialog --title "System information" --textbox "$TMP" "$BH" "$BW"
   rm -f "$TMP"
 }
 
@@ -134,11 +211,13 @@ show_debug() {
       -u zvoneni-amp-button --no-pager -n 25 || true
   } > "$TMP"
 
-  dialog --title "Debug information" --textbox "$TMP" 30 100
+  box_size 85 90 24 80 200 200
+  dialog --title "Debug information" --textbox "$TMP" "$BH" "$BW"
   rm -f "$TMP"
 }
 
 show_help() {
+  box_size 65 70 22 70 30 90
   dialog --title "How the bell system works" --msgbox "
 FLOW:
 schedule.txt → generate-timers.sh → systemd timers → zvoneni.target → zvoneni@.service → zvoneni-ring → sound
@@ -164,13 +243,14 @@ Debug menu shows:
 - systemd timers
 - last apply output
 - recent logs
-" 22 70
+" "$BH" "$BW"
 }
 
 toggle_system() {
   if [ "$STATE" = "RUNNING" ]; then
+    box_size 25 40 7 40 10 55
     dialog --yes-label "Yes, stop" --no-label "Cancel" \
-      --yesno "Stop bell system?" 7 40 || return
+      --yesno "Stop bell system?" "$BH" "$BW" || return
     systemctl stop zvoneni.target
     pause "Bell system STOPPED"
   else
@@ -188,21 +268,25 @@ test_sound() {
   done
 
   if [ ${#SOUNDS[@]} -eq 0 ]; then
-    dialog --msgbox "No sounds found in /opt/zvoneni/sounds" 7 50
+    box_size 22 45 7 50 10 60
+    dialog --msgbox "No sounds found in /opt/zvoneni/sounds" "$BH" "$BW"
     return
   fi
 
+  box_size 45 55 15 60 26 90
   CHOICE=$(dialog --title "Select sound to play" \
-    --menu "Choose sound:" 15 60 10 \
+    --menu "Choose sound:" "$BH" "$BW" 10 \
     "${SOUNDS[@]}" 3>&1 1>&2 2>&3)
 
   [ -z "$CHOICE" ] && return
 
   amp_load
   if [ "$AMP_ENABLED" -eq 1 ]; then
-    dialog --infobox "Ringing '$CHOICE' ...\n\nAmplifier on, sound starts in ${AMP_PRE_SECONDS}s." 7 58
+    box_size 20 45 7 58 10 65
+    dialog --infobox "Ringing '$CHOICE' ...\n\nAmplifier on, sound starts in ${AMP_PRE_SECONDS}s." "$BH" "$BW"
   else
-    dialog --infobox "Ringing '$CHOICE' ..." 5 45
+    box_size 15 35 5 45 8 55
+    dialog --infobox "Ringing '$CHOICE' ..." "$BH" "$BW"
   fi
 
   systemctl start "zvoneni@${CHOICE}.service"
@@ -254,12 +338,13 @@ amp_form() {
   local out err
 
   while true; do
+    box_size 45 55 18 68 26 90
     out=$(dialog --title "Amplifier settings" --form "
 GPIO pin        BCM number, 0-27
 Seconds before  power-up lead time, 0-300
 Seconds after   hold time once the sound ends, 0-300
 Active high     1 = HIGH switches the amp on, 0 = LOW does
-" 18 68 4 \
+" "$BH" "$BW" 4 \
       "GPIO pin:"       1 1 "$g"    1 20 8 4 \
       "Seconds before:" 2 1 "$pre"  2 20 8 4 \
       "Seconds after:"  3 1 "$post" 3 20 8 4 \
@@ -280,7 +365,8 @@ Active high     1 = HIGH switches the amp on, 0 = LOW does
       break
     fi
 
-    dialog --title "Invalid values" --msgbox "$err" 10 60
+    box_size 28 45 10 60 16 75
+    dialog --title "Invalid values" --msgbox "$err" "$BH" "$BW"
   done
 
   AMP_GPIO=$g
@@ -341,11 +427,12 @@ button_form() {
   local out err
 
   while true; do
+    box_size 40 55 16 76 24 95
     out=$(dialog --title "Button settings" --form "
 GPIO pin     BCM number, 0-27, must differ from the amplifier pin ($AMP_GPIO)
 Active low   1 = pressed reads LOW (button to GND, internal pull-up)
              0 = pressed reads HIGH (button to 3V3, internal pull-down)
-" 16 76 2 \
+" "$BH" "$BW" 2 \
       "GPIO pin:"   1 1 "$g"  1 16 8 4 \
       "Active low:" 2 1 "$al" 2 16 8 4 \
       3>&1 1>&2 2>&3) || return
@@ -365,7 +452,8 @@ Active low   1 = pressed reads LOW (button to GND, internal pull-up)
       break
     fi
 
-    dialog --title "Invalid values" --msgbox "$err" 10 66
+    box_size 28 48 10 66 16 80
+    dialog --title "Invalid values" --msgbox "$err" "$BH" "$BW"
   done
 
   BUTTON_GPIO=$g
@@ -387,7 +475,8 @@ amp_test_output() {
     return
   fi
 
-  dialog --infobox "Amplifier ON for 5 seconds (GPIO $AMP_GPIO) ..." 5 55
+  box_size 15 40 5 55 8 65
+  dialog --infobox "Amplifier ON for 5 seconds (GPIO $AMP_GPIO) ..." "$BH" "$BW"
   zvoneni-amp test 5 >/dev/null 2>&1
   pause "Test finished. GPIO $AMP_GPIO is back OFF."
 }
@@ -395,74 +484,18 @@ amp_test_output() {
 amp_status_box() {
   TMP=$(mktemp)
   zvoneni-amp status > "$TMP" 2>&1
-  dialog --title "Amplifier status" --textbox "$TMP" 18 78
+  box_size 55 70 18 78 200 200
+  dialog --title "Amplifier status" --textbox "$TMP" "$BH" "$BW"
   rm -f "$TMP"
-}
-
-# ---------------- update ----------------
-
-update_check() {
-  TMP=$(mktemp)
-  dialog --infobox "Contacting GitHub ..." 5 40
-  zvoneni-update check > "$TMP" 2>&1
-  dialog --title "Update check" --textbox "$TMP" 24 92
-  rm -f "$TMP"
-}
-
-update_status() {
-  TMP=$(mktemp)
-  zvoneni-update status > "$TMP" 2>&1
-  dialog --title "Installed version" --textbox "$TMP" 16 86
-  rm -f "$TMP"
-}
-
-# The installer rewrites /usr/local/bin/zvoneni-tui, which is the script
-# running right now - bash would carry on reading the new file from the old
-# offset. exec away from the TUI first so nothing holds it open.
-update_run() {  # $1 = apply|rollback
-  clear
-  exec bash -c "zvoneni-update $1; echo; read -rp 'Press Enter to return to the menu... '; exec zvoneni-tui"
-}
-
-update_menu() {
-  local choice
-
-  while true; do
-    choice=$(dialog --clear --title "Update" --menu "
-Checks GitHub for a newer version and installs it.
-
-The schedule and the amplifier settings are kept; settings
-added by a new version get their defaults.
-" 20 70 5 \
-      1 "Check for updates" \
-      2 "Install update" \
-      3 "Roll back to the previous version" \
-      4 "Installed version" \
-      0 "Back" 3>&1 1>&2 2>&3) || return
-
-    case $choice in
-      1) update_check ;;
-      2)
-        dialog --yes-label "Yes, install" --no-label "Cancel" \
-          --yesno "Install the update now?\n\nThe menu closes, the update runs in the terminal, then the menu comes back.\n\nSchedule and settings are kept." 13 66 || continue
-        update_run apply
-        ;;
-      3)
-        dialog --yes-label "Yes, roll back" --no-label "Cancel" \
-          --yesno "Roll back to the version installed before the last update?" 8 62 || continue
-        update_run rollback
-        ;;
-      4) update_status ;;
-      0|"") return ;;
-    esac
-  done
 }
 
 amp_menu() {
   local choice
 
   while true; do
+    term_size
     amp_summary
+    box_size 55 58 23 72 32 100
 
     choice=$(dialog --clear --title "Amplifier" --menu "
 Amplifier switching: $AMP_INFO
@@ -471,7 +504,7 @@ Hold-to-talk button: $BTN_INFO
 The bell still rings exactly on time - the timer is moved
 earlier by the pre-roll so the amplifier can warm up first.
 The button keeps the amplifier on while it is held down.
-" 23 72 8 \
+" "$BH" "$BW" 8 \
       1 "Enable / disable amplifier switching" \
       2 "Amplifier settings (GPIO, timing, polarity)" \
       3 "Test amplifier (on for 5 s)" \
@@ -489,8 +522,9 @@ The button keeps the amplifier on while it is held down.
       5) button_form ;;
       6) amp_status_box ;;
       7)
+        box_size 28 45 10 62 14 75
         dialog --yes-label "Yes, force off" --no-label "Cancel" \
-          --yesno "Force the amplifier OFF now?\n\nThis drops any bell or button currently holding it on." 10 62 || continue
+          --yesno "Force the amplifier OFF now?\n\nThis drops any bell or button currently holding it on." "$BH" "$BW" || continue
         zvoneni-amp reset >/dev/null 2>&1
         pause "Amplifier forced OFF."
         ;;
@@ -499,52 +533,171 @@ The button keeps the amplifier on while it is held down.
   done
 }
 
+# ---------------- update ----------------
+
+update_check() {
+  TMP=$(mktemp)
+  box_size 15 30 5 40 8 50
+  dialog --infobox "Contacting GitHub ..." "$BH" "$BW"
+  zvoneni-update check > "$TMP" 2>&1
+  box_size 80 88 24 92 200 200
+  dialog --title "Update check" --textbox "$TMP" "$BH" "$BW"
+  rm -f "$TMP"
+}
+
+update_status() {
+  TMP=$(mktemp)
+  zvoneni-update status > "$TMP" 2>&1
+  box_size 55 75 16 86 200 200
+  dialog --title "Installed version" --textbox "$TMP" "$BH" "$BW"
+  rm -f "$TMP"
+}
+
+update_run() {  # $1 = apply|rollback
+  run_and_return "zvoneni-update $1"
+}
+
+update_menu() {
+  local choice
+
+  while true; do
+    term_size
+    box_size 50 55 20 70 28 95
+
+    choice=$(dialog --clear --title "Update" --menu "
+Checks GitHub for a newer version and installs it.
+
+The schedule and the amplifier settings are kept; settings
+added by a new version get their defaults.
+" "$BH" "$BW" 5 \
+      1 "Check for updates" \
+      2 "Install update" \
+      3 "Roll back to the previous version" \
+      4 "Installed version" \
+      0 "Back" 3>&1 1>&2 2>&3) || return
+
+    case $choice in
+      1) update_check ;;
+      2)
+        box_size 35 50 13 66 18 80
+        dialog --yes-label "Yes, install" --no-label "Cancel" \
+          --yesno "Install the update now?\n\nThe menu closes, the update runs in the terminal, then the menu comes back.\n\nSchedule and settings are kept." "$BH" "$BW" || continue
+        update_run apply
+        ;;
+      3)
+        box_size 25 45 8 62 12 75
+        dialog --yes-label "Yes, roll back" --no-label "Cancel" \
+          --yesno "Roll back to the version installed before the last update?" "$BH" "$BW" || continue
+        update_run rollback
+        ;;
+      4) update_status ;;
+      0|"") return ;;
+    esac
+  done
+}
+
+# ---------------- schedule ----------------
+
+schedule_menu() {
+  local choice
+
+  while true; do
+    term_size
+    NEXT_BELL=$(zvoneni-next-bell 2>/dev/null || echo "-")
+    box_size 45 55 16 65 24 90
+
+    choice=$(dialog --clear --title "Rozvrh (Schedule)" --menu "
+Next bell: $NEXT_BELL
+
+Edit changes /opt/zvoneni/schedule.txt directly (nano).
+Apply regenerates the systemd timers from it.
+" "$BH" "$BW" 5 \
+      1 "Show active timers" \
+      2 "Edit schedule" \
+      3 "Apply schedule" \
+      4 "Test bell (select sound)" \
+      0 "Back" 3>&1 1>&2 2>&3) || return
+
+    case $choice in
+      1) show_timers ;;
+      2) nano /opt/zvoneni/schedule.txt ;;
+      3)
+        box_size 25 40 7 40 10 55
+        dialog --yes-label "Yes, apply" --no-label "Cancel" \
+          --yesno "Apply new schedule?" "$BH" "$BW" || continue
+        apply_schedule
+        ;;
+      4) test_sound ;;
+      0|"") return ;;
+    esac
+  done
+}
+
+# ---------------- system ----------------
+
+system_menu() {
+  local choice
+
+  while true; do
+    get_status
+    box_size 40 55 15 60 22 90
+
+    choice=$(dialog --clear --title "Systém (System)" --menu "
+SYSTEM STATE: $STATE
+Clock gate:   $GATE
+IP address:   $IP
+Overlay FS:   $OVERLAY
+" "$BH" "$BW" 6 \
+      1 "Refresh status" \
+      2 "System information" \
+      3 "Toggle bell system (START/STOP)" \
+      4 "Audio mixer (alsamixer)" \
+      5 "Debug" \
+      0 "Back" 3>&1 1>&2 2>&3) || return
+
+    case $choice in
+      1) : ;;
+      2) system_info ;;
+      3) toggle_system ;;
+      4) open_mixer ;;
+      5) show_debug ;;
+      0|"") return ;;
+    esac
+  done
+}
+
+# ---------------- main ----------------
+
+# Guarded so this file can be `source`d (e.g. by a test harness) without
+# immediately blocking on the real interactive loop. Unset/anything other
+# than "1" behaves exactly as before - this changes nothing in production.
+if [ "${ZVONENI_TUI_TEST:-0}" != "1" ]; then
 while true; do
   get_status
+  box_size 55 60 23 70 34 110
 
   choice=$(dialog --clear \
     --title "School Bell System" \
     --menu "
-SYSTEM STATE: $STATE
-
-Time:        $TIME
-Clock gate:  $GATE
-Amplifier:   $AMP_INFO
-" 25 75 14 \
-    1 "Refresh status" \
-    2 "Show active timers" \
-    3 "System information" \
-    4 "Edit schedule" \
-    5 "Apply schedule" \
-    6 "Test bell (select sound)" \
-    7 "Toggle bell system (START/STOP)" \
-    8 "Audio mixer (alsamixer)" \
-    9 "Debug" \
-    10 "Help" \
-    11 "Amplifier (GPIO switching)" \
-    12 "Update from GitHub" \
+$HEADER
+" "$BH" "$BW" 6 \
+    1 "Rozvrh (schedule)" \
+    2 "Zesilovač (amplifier)" \
+    3 "Systém (system)" \
+    4 "Aktualizace (update)" \
+    5 "Help" \
     0 "Exit" 3>&1 1>&2 2>&3)
 
   case $choice in
-    1) : ;;
-    2) show_timers ;;
-    3) system_info ;;
-    4) nano /opt/zvoneni/schedule.txt ;;
-    5)
-      dialog --yes-label "Yes, apply" --no-label "Cancel" \
-        --yesno "Apply new schedule?" 7 40 || continue
-      apply_schedule
-      ;;
-    6) test_sound ;;
-    7) toggle_system ;;
-    8) open_mixer ;;
-    9) show_debug ;;
-    10) show_help ;;
-    11) amp_menu ;;
-    12) update_menu ;;
+    1) schedule_menu ;;
+    2) amp_menu ;;
+    3) system_menu ;;
+    4) update_menu ;;
+    5) show_help ;;
     0) clear; exit ;;
   esac
 done
+fi
 EOF
 
 chmod +x /usr/local/bin/zvoneni-tui

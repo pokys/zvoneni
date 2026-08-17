@@ -105,7 +105,7 @@ Proto se po každé změně pre-rollu musí přegenerovat timery, což TUI děl�
 ```bash
 zvoneni-tui
 ```
-→ `11 Amplifier (GPIO switching)`
+→ `Zesilovač (amplifier)`
 
 Nastavit lze zapnutí funkce, GPIO pin, sekundy před a po, a polaritu.
 **Ručně soubor upravovat netřeba**, TUI je jediné doporučené rozhraní.
@@ -150,7 +150,7 @@ Volitelné tlačítko, které po dobu stisku drží zesilovač zapnutý – typi
 pro hlášení do mikrofonu. **Vyžaduje zapnuté spínání zesilovače** (`AMP_ENABLED=1`);
 tlačítko si zesilovač půjčuje, neobchází ho.
 
-Nastavuje se v TUI → `11 Amplifier` → `4` a `5`.
+Nastavuje se v TUI → `Zesilovač` → `4` a `5`.
 
 | Klíč | Význam |
 |---|---|
@@ -250,7 +250,7 @@ Systém se umí aktualizovat sám z GitHubu.
 ```bash
 zvoneni-tui
 ```
-→ `12 Update from GitHub`
+→ `Aktualizace (update)`
 
 | Položka | Co dělá |
 |---|---|
