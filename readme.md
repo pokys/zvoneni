@@ -12,6 +12,7 @@ Zvonění je řízeno rozvrhem a přehrává zvuk přes 3.5mm jack.
 
 - systemd timers (žádný cron)
 - volitelné spínání zesilovače přes GPIO (zapne před zvoněním, vypne po něm)
+- volitelné tlačítko, které po dobu stisku drží zesilovač zapnutý
 - automatický start po bootu
 - ochrana proti špatnému času (NTP gate) – platí pro ruční i plánované zvonění
 - tolerantní NTP gate (po bootu čeká, pak pustí zvonění i bez internetu)

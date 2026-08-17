@@ -135,11 +135,46 @@ tedy v RAM – po rebootu je čistý a na SD kartu se nic nezapisuje.
 Při bootu jede `zvoneni-amp-reset.service`, který pin srazí dolů. Je to
 pojistka pro případ, že Pi spadlo mezi zapnutím a vypnutím zesilovače.
 
+### 🎙️ Tlačítko (hold-to-talk)
+
+Volitelné tlačítko, které po dobu stisku drží zesilovač zapnutý – typicky
+pro hlášení do mikrofonu. **Vyžaduje zapnuté spínání zesilovače** (`AMP_ENABLED=1`);
+tlačítko si zesilovač půjčuje, neobchází ho.
+
+Nastavuje se v TUI → `11 Amplifier` → `4` a `5`.
+
+| Klíč | Význam |
+|---|---|
+| `BUTTON_ENABLED` | 0/1 |
+| `BUTTON_GPIO` | BCM pin tlačítka, musí být jiný než `AMP_GPIO` |
+| `BUTTON_ACTIVE_LOW` | 1 = stisk čte LOW (tlačítko proti GND, vnitřní pull-up) |
+
+Zapojení pro výchozí `BUTTON_ACTIVE_LOW=1`: tlačítko mezi **GPIO27 a GND**,
+nic dalšího – pull-up je vnitřní. Žádný externí rezistor netřeba.
+
+Zvonění a tlačítko se nepřetahují: když někdo tlačítko drží přes zvonění,
+konec zvonění zesilovač **nevypne**. Vypne se až když ho pustí poslední držitel.
+
+```bash
+systemctl status zvoneni-amp-button
+journalctl -u zvoneni-amp-button -f    # stisky a uvolnění v reálném čase
+```
+
+Daemon se budí přes `gpiomon` (balík `gpiod`). Když `gpiomon` chybí nebo se ho
+nepodaří spustit, **přepne se sám na polling** a do journalu zapíše přesný
+příkaz, který zkoušel – funkce běží dál, jen méně elegantně.
+
+Unit je vždy `enabled`; jestli daemon poběží, rozhoduje výhradně `BUTTON_ENABLED`
+v konfiguraci. Při vypnutém tlačítku čistě skončí, což **není** chyba.
+
 ### ⚡ Zapojení
 
 GPIO dává **3,3 V a jednotky mA**. Zesilovač se spíná přes MOSFET, relé
 nebo SSR – **nikdy ne přímo z pinu**. Na gate/vstup spínače patří pull-down
 rezistor, aby zesilovač nenaskočil během bootu, než se pin nastaví.
+
+Tlačítko se naopak připojuje přímo mezi pin a GND – je to vstup a pull-up
+je vnitřní.
 
 ---
 

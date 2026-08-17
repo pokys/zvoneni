@@ -11,3 +11,9 @@ apt install -y dialog alsa-utils nano
 if ! command -v pinctrl >/dev/null 2>&1; then
   apt install -y raspi-utils || echo "[install] WARNING: pinctrl not available - amplifier switching will not work"
 fi
+
+# gpiomon lets the button daemon sleep until the pin actually changes.
+# Also non-fatal: without it the daemon falls back to polling.
+if ! command -v gpiomon >/dev/null 2>&1; then
+  apt install -y gpiod || echo "[install] WARNING: gpiomon not available - the button will poll instead"
+fi

@@ -18,6 +18,9 @@ amp_load() {
   AMP_ACTIVE_HIGH=1
   AMP_PRE_SECONDS=10
   AMP_POST_SECONDS=2
+  BUTTON_ENABLED=0
+  BUTTON_GPIO=27
+  BUTTON_ACTIVE_LOW=1
 
   if command -v zvoneni-amp >/dev/null 2>&1; then
     eval "$(zvoneni-amp config 2>/dev/null)"
@@ -26,10 +29,17 @@ amp_load() {
 
 amp_summary() {
   amp_load
+
   if [ "$AMP_ENABLED" -eq 1 ]; then
     AMP_INFO="ON  (GPIO $AMP_GPIO, -${AMP_PRE_SECONDS}s / +${AMP_POST_SECONDS}s)"
   else
     AMP_INFO="OFF"
+  fi
+
+  if [ "$BUTTON_ENABLED" -eq 1 ]; then
+    BTN_INFO="ON  (GPIO $BUTTON_GPIO, active $([ "$BUTTON_ACTIVE_LOW" -eq 1 ] && echo low || echo high))"
+  else
+    BTN_INFO="OFF"
   fi
 }
 
@@ -120,7 +130,8 @@ show_debug() {
     fi
     echo
     echo "=== LAST 25 LOG LINES ==="
-    journalctl -u zvoneni@* -u zvoneni.target -u clock-watch --no-pager -n 25 || true
+    journalctl -u zvoneni@* -u zvoneni.target -u clock-watch \
+      -u zvoneni-amp-button --no-pager -n 25 || true
   } > "$TMP"
 
   dialog --title "Debug information" --textbox "$TMP" 30 100
@@ -136,6 +147,11 @@ AMPLIFIER (optional):
 - timer fires PRE seconds early, amplifier is switched on
 - the sound still starts exactly at the scheduled time
 - amplifier goes off POST seconds after the sound ends
+
+BUTTON (optional):
+- holding it keeps the amplifier on
+- needs amplifier switching enabled
+- a bell ending will not cut it off while it is held
 
 CLOCK GATE:
 - waits for NTP at boot (max 3 min)
@@ -202,22 +218,33 @@ amp_valid() {  # value min max
   [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
 }
 
-amp_save() {  # enabled gpio active_high pre post
+# Writes whatever amp_load put in the globals, so callers do
+# amp_load -> change a variable -> amp_save.
+amp_save() {
   local tmp
   tmp=$(mktemp /opt/zvoneni/.amp.conf.XXXXXX) || return 1
 
   cat > "$tmp" <<AMPCONF
 # Amplifier switching for the school bell system.
 # Managed by zvoneni-tui -> Amplifier. Rewritten wholesale on every save.
-AMP_ENABLED=$1
-AMP_GPIO=$2
-AMP_ACTIVE_HIGH=$3
-AMP_PRE_SECONDS=$4
-AMP_POST_SECONDS=$5
+AMP_ENABLED=$AMP_ENABLED
+AMP_GPIO=$AMP_GPIO
+AMP_ACTIVE_HIGH=$AMP_ACTIVE_HIGH
+AMP_PRE_SECONDS=$AMP_PRE_SECONDS
+AMP_POST_SECONDS=$AMP_POST_SECONDS
+BUTTON_ENABLED=$BUTTON_ENABLED
+BUTTON_GPIO=$BUTTON_GPIO
+BUTTON_ACTIVE_LOW=$BUTTON_ACTIVE_LOW
 AMPCONF
 
   chmod 644 "$tmp"
   mv -f "$tmp" "$AMP_CONF"
+}
+
+# The unit is always enabled and decides from amp.conf whether to run,
+# so a restart is all that is ever needed after a config change.
+button_sync() {
+  systemctl restart zvoneni-amp-button.service >/dev/null 2>&1
 }
 
 amp_form() {
@@ -255,7 +282,12 @@ Active high     1 = HIGH switches the amp on, 0 = LOW does
     dialog --title "Invalid values" --msgbox "$err" 10 60
   done
 
-  if ! amp_save "$AMP_ENABLED" "$g" "$ah" "$pre" "$post"; then
+  AMP_GPIO=$g
+  AMP_PRE_SECONDS=$pre
+  AMP_POST_SECONDS=$post
+  AMP_ACTIVE_HIGH=$ah
+
+  if ! amp_save; then
     pause "Cannot write $AMP_CONF (read-only filesystem?)"
     return
   fi
@@ -267,15 +299,83 @@ Active high     1 = HIGH switches the amp on, 0 = LOW does
 amp_toggle() {
   amp_load
 
-  local new=0
-  [ "$AMP_ENABLED" -eq 1 ] || new=1
+  if [ "$AMP_ENABLED" -eq 1 ]; then
+    AMP_ENABLED=0
+  else
+    AMP_ENABLED=1
+  fi
 
-  if ! amp_save "$new" "$AMP_GPIO" "$AMP_ACTIVE_HIGH" "$AMP_PRE_SECONDS" "$AMP_POST_SECONDS"; then
+  if ! amp_save; then
     pause "Cannot write $AMP_CONF (read-only filesystem?)"
     return
   fi
 
   apply_schedule
+}
+
+button_toggle() {
+  amp_load
+
+  if [ "$BUTTON_ENABLED" -eq 1 ]; then
+    BUTTON_ENABLED=0
+  else
+    BUTTON_ENABLED=1
+  fi
+
+  if ! amp_save; then
+    pause "Cannot write $AMP_CONF (read-only filesystem?)"
+    return
+  fi
+
+  button_sync
+
+  if [ "$BUTTON_ENABLED" -eq 1 ] && [ "$AMP_ENABLED" -ne 1 ]; then
+    pause "Button enabled, but amplifier switching is OFF - the button will do nothing until you enable it."
+  fi
+}
+
+button_form() {
+  amp_load
+  local g="$BUTTON_GPIO" al="$BUTTON_ACTIVE_LOW"
+  local out err
+
+  while true; do
+    out=$(dialog --title "Button settings" --form "
+GPIO pin     BCM number, 0-27, must differ from the amplifier pin ($AMP_GPIO)
+Active low   1 = pressed reads LOW (button to GND, internal pull-up)
+             0 = pressed reads HIGH (button to 3V3, internal pull-down)
+" 16 76 2 \
+      "GPIO pin:"   1 1 "$g"  1 16 8 4 \
+      "Active low:" 2 1 "$al" 2 16 8 4 \
+      3>&1 1>&2 2>&3) || return
+
+    { read -r g; read -r al; } <<< "$out"
+
+    err=""
+    amp_valid "$g"  0 27 || err="${err}GPIO pin must be a number 0-27."$'\n'
+    amp_valid "$al" 0 1  || err="${err}Active low must be 0 or 1."$'\n'
+
+    if [ -z "$err" ] && [ "$((10#$g))" -eq "$AMP_GPIO" ]; then
+      err="GPIO pin must differ from the amplifier pin ($AMP_GPIO)."$'\n'
+    fi
+
+    if [ -z "$err" ]; then
+      g=$((10#$g)); al=$((10#$al))
+      break
+    fi
+
+    dialog --title "Invalid values" --msgbox "$err" 10 66
+  done
+
+  BUTTON_GPIO=$g
+  BUTTON_ACTIVE_LOW=$al
+
+  if ! amp_save; then
+    pause "Cannot write $AMP_CONF (read-only filesystem?)"
+    return
+  fi
+
+  button_sync
 }
 
 amp_test_output() {
@@ -306,23 +406,29 @@ amp_menu() {
 
     choice=$(dialog --clear --title "Amplifier" --menu "
 Amplifier switching: $AMP_INFO
+Hold-to-talk button: $BTN_INFO
 
 The bell still rings exactly on time - the timer is moved
 earlier by the pre-roll so the amplifier can warm up first.
-" 20 72 6 \
+The button keeps the amplifier on while it is held down.
+" 23 72 8 \
       1 "Enable / disable amplifier switching" \
-      2 "Settings (GPIO, timing, polarity)" \
+      2 "Amplifier settings (GPIO, timing, polarity)" \
       3 "Test amplifier (on for 5 s)" \
-      4 "Amplifier status" \
-      5 "Force amplifier OFF (reset)" \
+      4 "Enable / disable the button" \
+      5 "Button settings (GPIO, polarity)" \
+      6 "Amplifier status" \
+      7 "Force amplifier OFF (reset)" \
       0 "Back" 3>&1 1>&2 2>&3) || return
 
     case $choice in
       1) amp_toggle ;;
       2) amp_form ;;
       3) amp_test_output ;;
-      4) amp_status_box ;;
-      5)
+      4) button_toggle ;;
+      5) button_form ;;
+      6) amp_status_box ;;
+      7)
         zvoneni-amp reset >/dev/null 2>&1
         pause "Amplifier forced OFF."
         ;;
