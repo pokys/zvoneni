@@ -10,6 +10,13 @@ set -euo pipefail
 SCHEDULE="/opt/zvoneni/schedule.txt"
 SOUNDS_DIR="/opt/zvoneni/sounds"
 
+# Everything below mutates /etc/systemd - fail with a clear message
+# instead of a raw mktemp/permission error several steps in.
+if [ "$(id -u)" -ne 0 ]; then
+  echo "generate-timers.sh: run as root, e.g. sudo generate-timers.sh" >&2
+  exit 1
+fi
+
 # NOTE: the bell system is deliberately NOT stopped here. It is stopped
 # further down, only once we know the schedule is valid AND something
 # actually changed - otherwise a rejected schedule would leave the
@@ -20,13 +27,28 @@ SOUNDS_DIR="/opt/zvoneni/sounds"
 # ------------------------------------------------------------
 echo "[generator] validating schedule"
 
+# The schedule is read twice (validate, then generate). Snapshot it first
+# so a concurrent edit between the passes cannot smuggle unvalidated
+# content into the generated units.
+SNAP=$(mktemp /run/zvoneni-schedule.XXXXXX)
+trap 'rm -f "$SNAP"' EXIT
+cat "$SCHEDULE" > "$SNAP"
+SCHEDULE="$SNAP"
+
 # The full week, deliberately - not a leftover of a weekday-only design.
 # Everything downstream (shift_time's day array, the unit name glob,
 # OnCalendar itself) already handles Sat/Sun; this was the only gate.
-DAYS="Mon Tue Wed Thu Fri Sat Sun"
+valid_day() {
+  case "$1" in
+    Mon|Tue|Wed|Thu|Fri|Sat|Sun) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ERROR=0
 VALID_COUNT=0
 lineno=0
+SEEN_SLOTS=""
 
 if [ ! -d "$SOUNDS_DIR" ]; then
   echo "ERROR: sounds directory not found: $SOUNDS_DIR"
@@ -42,12 +64,6 @@ if [ ${#sound_files[@]} -eq 0 ]; then
   exit 1
 fi
 
-AVAILABLE_SOUNDS=""
-for f in "${sound_files[@]}"; do
-  name=$(basename "$f" .wav)
-  AVAILABLE_SOUNDS="${AVAILABLE_SOUNDS}${name}"$'\n'
-done
-
 while read -r line; do
   lineno=$((lineno+1))
 
@@ -62,8 +78,10 @@ while read -r line; do
     continue
   fi
 
-  if ! echo "$DAYS" | grep -qw "$DAY"; then
-    echo "ERROR line $lineno: invalid day '$DAY'"
+  # Exact match, not grep: a regexy value like "M.n" used to slip through
+  # a grep -w check and then mis-plan in shift_time.
+  if ! valid_day "$DAY"; then
+    echo "ERROR line $lineno: invalid day '$DAY' (use Mon..Sun)"
     ERROR=1
   fi
 
@@ -72,10 +90,24 @@ while read -r line; do
     ERROR=1
   fi
 
-  if ! echo "$AVAILABLE_SOUNDS" | grep -qw "$TYPE"; then
+  # TYPE becomes part of a path and a unit name - constrain the format,
+  # then check the actual file (grep -w against a list accepted "foo"
+  # when only foo-bar.wav existed).
+  if ! [[ "$TYPE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "ERROR line $lineno: invalid sound name '$TYPE' (letters, digits, - and _ only)"
+    ERROR=1
+  elif [ ! -f "$SOUNDS_DIR/$TYPE.wav" ]; then
     echo "ERROR line $lineno: sound '$TYPE' not found in $SOUNDS_DIR"
     ERROR=1
   fi
+
+  # Two lines with the same DAY+TIME would silently overwrite each other's
+  # generated unit (the name is keyed on the slot) - refuse instead.
+  if echo "$SEEN_SLOTS" | grep -qx "$DAY $TIME"; then
+    echo "ERROR line $lineno: duplicate bell at $DAY $TIME"
+    ERROR=1
+  fi
+  SEEN_SLOTS="${SEEN_SLOTS}${DAY} ${TIME}"$'\n'
 
   if [ "$ERROR" -eq 0 ]; then
     VALID_COUNT=$((VALID_COUNT+1))
@@ -169,7 +201,7 @@ shift_time() {
 echo "[generator] generating timers"
 
 STAGE=$(mktemp -d /run/zvoneni-gen.XXXXXX)
-trap 'rm -rf "$STAGE"' EXIT
+trap 'rm -rf "$STAGE"; rm -f "$SNAP"' EXIT
 
 while read -r DAY TIME TYPE; do
   [[ -z "$DAY" ]] && continue
@@ -180,13 +212,23 @@ while read -r DAY TIME TYPE; do
   UNIT="zvoneni-${DAY}-${TIME//:/}"
   CAL=$(shift_time "$DAY" "$TIME" "$PRE")
 
+  # The slot unit runs zvoneni-ring directly rather than delegating to
+  # the zvoneni@TYPE template. Two bells of the same TYPE overlapping
+  # (long pre-roll or a long wav) would share one template instance, and
+  # `systemctl start` on an already-active unit is a no-op - the second
+  # bell was silently skipped. Distinct units per slot, each holding the
+  # amplifier under its own name. zvoneni@ stays for manual/TUI tests.
   cat > "$STAGE/${UNIT}.service" <<EOL
 [Unit]
 Description=School bell ${DAY} ${TIME} (${TYPE})
+ConditionPathExists=/run/clock-ok
+ConditionPathExists=/opt/zvoneni/sounds/${TYPE}.wav
 
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl start --no-block zvoneni@${TYPE}.service
+TimeoutStartSec=900
+ExecStart=/usr/local/bin/zvoneni-ring ${TYPE} ring-${DAY}-${TIME//:/}
+ExecStopPost=/usr/local/bin/zvoneni-amp off ring-${DAY}-${TIME//:/}
 EOL
 
   cat > "$STAGE/${UNIT}.timer" <<EOL
@@ -250,7 +292,10 @@ shopt -u nullglob
 if [ "$CHANGED" -eq 0 ]; then
   echo "[generator] schedule unchanged – nothing written to disk"
   clear_orphan_units
-  systemctl start zvoneni.target
+  # --no-block everywhere the generator starts the target: at boot this
+  # script runs Before=zvoneni.target, so a blocking start of that very
+  # target would deadlock until the job timeout.
+  systemctl start --no-block zvoneni.target
   echo "[generator] done"
   exit 0
 fi
@@ -296,7 +341,7 @@ for t in "${staged_timers[@]}"; do
 done
 
 echo "[generator] starting bell system"
-systemctl start zvoneni.target
+systemctl start --no-block zvoneni.target
 
 echo "[generator] done"
 EOF
