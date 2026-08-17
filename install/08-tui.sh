@@ -6,6 +6,15 @@ echo "[install] installing TUI"
 cat > /usr/local/bin/zvoneni-tui <<'EOF'
 #!/bin/bash
 
+# Everything in here manages root-owned state (systemd units, /opt files,
+# GPIO). Without this guard a non-root run fails piecemeal deep inside -
+# nano opening the schedule read-only, amp settings failing to save -
+# instead of saying what is actually wrong. Same guard as zvoneni-update.
+if [ "${ZVONENI_TUI_TEST:-0}" != "1" ] && [ "$(id -u)" -ne 0 ]; then
+  echo "zvoneni-tui: run as root, e.g. sudo zvoneni-tui" >&2
+  exit 1
+fi
+
 # ---------------- terminal-aware sizing ----------------
 
 # Prefer stty (reads the tty ioctl directly, works even if TERM is unset
