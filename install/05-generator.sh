@@ -374,9 +374,9 @@ systemctl daemon-reload
 clear_orphan_units
 
 echo "[generator] enabling timers"
-for t in "${staged_timers[@]}"; do
-  systemctl enable "$(basename "$t")"
-done
+# One systemctl invocation means one manager reload. Calling enable once
+# per timer made a full schedule apply take roughly 90 seconds on the Pi.
+systemctl enable "${staged_timers[@]##*/}"
 
 if [ "$TARGET_SHOULD_RUN" -eq 1 ]; then
   echo "[generator] restoring running bell system"
