@@ -144,6 +144,19 @@ Button:       $BTN_INFO"
 }
 
 apply_schedule() {
+  # A deliberately temporary change is a legitimate thing to want, so this
+  # warns rather than refuses (unlike zvoneni-update, where a silently
+  # reverted update would leave the appliance a version behind with no
+  # trace). Only appears when the overlay is actually on.
+  if overlay_active; then
+    # box_size needs TERM_LINES/TERM_COLS; every current caller happens to
+    # have run term_size already, but do not rely on that from here.
+    term_size
+    box_size 35 55 13 64 18 84
+    dialog --yes-label "Yes, apply" --no-label "Cancel" \
+      --yesno "Overlay filesystem is ON.\n\nThis will work now, but the schedule and the generated timers live in RAM and are LOST on the next reboot.\n\nTo keep it: raspi-config -> Performance Options -> Overlay File System -> off, reboot, apply again, then turn the overlay back on." "$BH" "$BW" || return
+  fi
+
   run_and_return "generate-timers.sh 2>&1 | tee /run/zvoneni-last-apply.log"
 }
 
