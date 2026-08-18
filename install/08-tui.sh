@@ -187,11 +187,35 @@ show_timers() {
       echo
     fi
 
-    systemctl list-timers --all --no-pager | grep -i zvoneni || echo "(none)"
+    # Every timer is listed - nothing is summarized or truncated - but the
+    # raw list-timers line is 131 characters, which a full Mon-Fri
+    # schedule turns into 80 lines that get cut off in an 80-column SSH
+    # window. Dropped: the PASSED column and the ACTIVATES column (the
+    # latter is just the unit name with a different suffix). Kept: NEXT,
+    # LAST and the unit.
+    #
+    # Timestamps are matched by SHAPE, not by field position: the LEFT
+    # column varies in width ("17min" is one field, "1h 7min" is two), so
+    # positional parsing shifts - the same trap that once broke the MOTD.
+    printf '%-23s  %-23s  %s\n' "NEXT (timer fires)" "LAST (last fired)" "UNIT"
+    printf '%.0s-' $(seq 1 72); echo
+
+    systemctl list-timers --all --no-pager --no-legend 2>/dev/null \
+      | grep -i zvoneni \
+      | awk '{
+          n = 0; s = $0
+          while (match(s, /[A-Z][a-z][a-z] [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]/)) {
+            n++; ts[n] = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+          }
+          u = ""
+          if (match($0, /zvoneni-[A-Za-z0-9_.-]+\.timer/)) u = substr($0, RSTART, RLENGTH)
+          printf "%-23s  %-23s  %s\n", (n >= 1 ? ts[1] : "-"), (n >= 2 ? ts[2] : "-"), u
+        }' \
+      || echo "(none)"
   } > "$TMP"
 
   box_size 80 90 20 80 200 200
-  dialog --title "Active timers (systemctl list-timers)" --textbox "$TMP" "$BH" "$BW"
+  dialog --title "Active timers" --textbox "$TMP" "$BH" "$BW"
   rm -f "$TMP"
 }
 
