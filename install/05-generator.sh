@@ -233,6 +233,7 @@ while read -r DAY TIME TYPE; do
   cat > "$STAGE/${UNIT}.service" <<EOL
 [Unit]
 Description=School bell ${DAY} ${TIME} (${TYPE})
+PartOf=zvoneni.target
 ConditionPathExists=/run/clock-ok
 ConditionPathExists=/opt/zvoneni/sounds/${TYPE}.wav
 
@@ -246,6 +247,10 @@ EOL
   cat > "$STAGE/${UNIT}.timer" <<EOL
 [Unit]
 Description=Timer for ${UNIT} (fires ${CAL}, pre-roll ${PRE}s)
+PartOf=zvoneni.target
+# At boot the target, its timers and the generator are queued together.
+# Order each timer after regeneration so an old schedule cannot arm first.
+After=zvoneni-generator.service
 
 [Timer]
 OnCalendar=${CAL}
@@ -296,7 +301,9 @@ done
 # units on disk that the schedule no longer contains
 shopt -s nullglob
 stale=()
+installed_units=()
 for f in ${INSTALLED_GLOB}.timer ${INSTALLED_GLOB}.service; do
+  installed_units+=("$(basename "$f")")
   [ -e "$STAGE/$(basename "$f")" ] || stale+=("$f")
 done
 shopt -u nullglob
@@ -305,10 +312,6 @@ shopt -u nullglob
 if [ "$CHANGED" -eq 0 ]; then
   echo "[generator] schedule unchanged – nothing written to disk"
   clear_orphan_units
-  # --no-block everywhere the generator starts the target: at boot this
-  # script runs Before=zvoneni.target, so a blocking start of that very
-  # target would deadlock until the job timeout.
-  systemctl start --no-block zvoneni.target
   echo "[generator] done"
   exit 0
 fi
@@ -316,8 +319,30 @@ fi
 # ------------------------------------------------------------
 # APPLY
 # ------------------------------------------------------------
-echo "[generator] stopping bell system"
-systemctl stop zvoneni.target 2>/dev/null || true
+# Preserve the operator's intended state. During boot the target is not
+# active yet, but it already has a queued start job behind this generator;
+# that counts as "should run" too. A manually stopped target has neither.
+TARGET_SHOULD_RUN=0
+if systemctl is-active --quiet zvoneni.target \
+   || systemctl list-jobs --no-legend --plain --no-pager 2>/dev/null \
+        | awk '$2 == "zvoneni.target" && $3 == "start" { found=1 } END { exit !found }'; then
+  TARGET_SHOULD_RUN=1
+fi
+
+echo "[generator] stopping installed bell units"
+if [ "$TARGET_SHOULD_RUN" -eq 1 ]; then
+  # This also cancels a queued target start during a changed boot. It is
+  # re-queued below after the new dependency graph has been loaded.
+  systemctl stop zvoneni.target 2>/dev/null || true
+fi
+
+# Migration safety: units produced by versions before v1.7.1 do not have
+# PartOf=zvoneni.target, so stopping the target cannot stop them. Stop every
+# installed slot explicitly on the first apply; later this is redundant but
+# harmless. It also terminates an in-progress scheduled ring cleanly.
+if [ ${#installed_units[@]} -gt 0 ]; then
+  systemctl stop "${installed_units[@]}" 2>/dev/null || true
+fi
 
 if [ ${#stale[@]} -gt 0 ]; then
   echo "[generator] removing ${#stale[@]} obsolete unit(s)"
@@ -353,8 +378,14 @@ for t in "${staged_timers[@]}"; do
   systemctl enable "$(basename "$t")"
 done
 
-echo "[generator] starting bell system"
-systemctl start --no-block zvoneni.target
+if [ "$TARGET_SHOULD_RUN" -eq 1 ]; then
+  echo "[generator] restoring running bell system"
+  # At boot the generator is ordered Before= the target, so do not block on
+  # a job which cannot complete until this process exits.
+  systemctl start --no-block zvoneni.target
+else
+  echo "[generator] bell system was stopped – leaving it stopped"
+fi
 
 echo "[generator] done"
 EOF

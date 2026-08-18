@@ -267,8 +267,20 @@ case "$CMD" in
     [ "$AMP_ENABLED" -eq 1 ] || exit 0
     HOLDER=$(clean_holder "$2")
     take_lock || exit 1
-    touch "$STATE_DIR/$HOLDER"
-    amp_write 1
+    touch "$STATE_DIR/$HOLDER" || { log "cannot record holder '$HOLDER'"; exit 1; }
+
+    # The pin is switched only on the first claim. In particular, do not
+    # replay amp_write for a second holder: the config may have changed in
+    # between, and doing so would energise the new GPIO and overwrite the
+    # ownership marker while the original GPIO was still on. The marker is
+    # the authoritative 0 -> 1 transition because it also covers recovery
+    # from a process that died after energising the pin.
+    if ! amp_owned; then
+      if ! amp_write 1; then
+        rm -f "$STATE_DIR/$HOLDER"
+        exit 1
+      fi
+    fi
     ;;
 
   off)

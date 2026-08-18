@@ -171,18 +171,24 @@ fetch_remote() {
 # stash stays on disk rather than being cleaned up.
 stash_sounds() {
   # An existing stash means an earlier run was interrupted between stash
-  # and restore. Never discard it - fold it into the live library first
-  # (live files win, the stash only fills gaps), then stash the result.
+  # and restore. Never discard it - fold it into the live library first,
+  # then stash the result. The stash wins name collisions: the live copy may
+  # merely be a stock sound seeded by the interrupted installer, while the
+  # stash is the school's original customised file.
   if [ -d "$SOUNDS_BAK" ]; then
     say "Recovering sound stash from an interrupted update ..."
-    mkdir -p "$REPO/sounds"
+    mkdir -p "$REPO/sounds" || die "cannot recreate $REPO/sounds - your sounds are safe in $SOUNDS_BAK"
     local f base
-    for f in "$SOUNDS_BAK"/*; do
-      [ -e "$f" ] || continue
-      base=$(basename "$f")
-      [ -e "$REPO/sounds/$base" ] || mv "$f" "$REPO/sounds/$base" || die "cannot recover $base from $SOUNDS_BAK"
+    local -a saved=()
+    shopt -s nullglob dotglob
+    saved=("$SOUNDS_BAK"/*)
+    shopt -u nullglob dotglob
+    for f in "${saved[@]}"; do
+      base=${f##*/}
+      rm -f "$REPO/sounds/$base" || die "cannot replace $REPO/sounds/$base - your original is safe in $SOUNDS_BAK"
+      mv "$f" "$REPO/sounds/$base" || die "cannot recover $base from $SOUNDS_BAK"
     done
-    rm -rf "$SOUNDS_BAK"
+    rmdir "$SOUNDS_BAK" || die "cannot finish recovery - unexpected files remain in $SOUNDS_BAK"
   fi
 
   [ -d "$REPO/sounds" ] || return 0
@@ -196,22 +202,34 @@ stash_sounds() {
 restore_sounds() {
   [ -d "$SOUNDS_BAK" ] || return 0
 
-  mkdir -p "$REPO/sounds" || die "cannot recreate $REPO/sounds - your sounds are safe in $SOUNDS_BAK"
+  mkdir -p "$REPO/sounds" || return 1
 
-  # Per-file move, appliance copy wins over freshly checked-out stock.
+  # Per-file move, appliance copy wins over freshly checked-out stock. Use
+  # dotglob as well: a hidden recording is still user data and must not be
+  # deleted when the stash directory is cleaned up.
   local f base fail=0
-  for f in "$SOUNDS_BAK"/*; do
-    [ -e "$f" ] || continue
-    base=$(basename "$f")
-    rm -f "$REPO/sounds/$base"
+  local -a saved=()
+  shopt -s nullglob dotglob
+  saved=("$SOUNDS_BAK"/*)
+  shopt -u nullglob dotglob
+  for f in "${saved[@]}"; do
+    base=${f##*/}
+    if ! rm -f "$REPO/sounds/$base"; then
+      fail=1
+      continue
+    fi
     mv "$f" "$REPO/sounds/$base" || fail=1
   done
 
   if [ "$fail" -ne 0 ]; then
     say "WARNING: some sounds could not be restored - they remain in $SOUNDS_BAK"
-  else
-    rm -rf "$SOUNDS_BAK"
+    return 1
   fi
+
+  rmdir "$SOUNDS_BAK" || {
+    say "WARNING: unexpected files remain in $SOUNDS_BAK"
+    return 1
+  }
 
   say "Sound library kept: $(find "$REPO/sounds" -name '*.wav' 2>/dev/null | wc -l) file(s)."
 }
@@ -240,19 +258,34 @@ migrate_config() {
 run_install() {
   say ""
   say "Running the installer ..."
-  bash "$REPO/install/install.sh" || die "the installer failed - the system may be half updated.
+  if ! bash "$REPO/install/install.sh"; then
+    # Do not leave the appliance using newly seeded stock sounds merely
+    # because a later installer step failed. Best-effort restoration keeps
+    # the original library available while the incomplete marker requests a
+    # retry of the software installation.
+    restore_sounds || die "the installer failed and some sounds could not be restored.
+The system may be half updated. Your remaining sounds are safe in $SOUNDS_BAK
+Try 'zvoneni-update apply' again after correcting the error."
+    die "the installer failed - the system may be half updated.
 Try 'zvoneni-update apply' again, or 'zvoneni-update rollback'.
-Any stashed sounds are in $SOUNDS_BAK"
+Your sound library has been restored."
+  fi
 
-  restore_sounds
+  restore_sounds || die "some sounds could not be restored.
+The update remains marked incomplete and the originals are safe in $SOUNDS_BAK
+Correct the error, then run 'zvoneni-update apply' again."
   migrate_config
 
   # install.sh never runs the generator, so without this the old units stay
   # on disk until the next boot - and their format may have changed.
   say ""
   say "Regenerating timers ..."
-  /usr/local/bin/generate-timers.sh || say "WARNING: generate-timers.sh failed - check the schedule"
+  /usr/local/bin/generate-timers.sh || die "generate-timers.sh failed.
+The update remains marked incomplete. Check the schedule and systemd, then
+run 'zvoneni-update apply' again."
 
+  # Every required step, including sound restoration and timer generation,
+  # succeeded. Only now is it safe to report the transaction complete.
   rm -f "$INCOMPLETE"
 
   say ""
