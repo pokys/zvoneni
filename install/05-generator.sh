@@ -188,6 +188,18 @@ shift_time() {
 # generator runs on every boot, so unconditional rewrites would burn the
 # card for nothing.
 #
+# AccuracySec is 1ms rather than systemd's 1s default. systemd coalesces
+# timers within that window so the CPU can sleep longer, which meant a
+# bell fired anywhere inside its second - measured at 200-470ms late on
+# the appliance. A school bell is expected to match the clock, and this
+# box is mains-powered and already takes ~67 timer interrupts a second,
+# so batching 80 wakeups a day saves nothing worth having.
+#
+# This fixes the timer's own jitter only. The remaining delay - process
+# startup, amplifier switching, and aplay opening the ALSA device, about
+# 180ms together - is not timer accuracy and would need zvoneni-ring to
+# sleep until an absolute target instead of a relative pre-roll.
+#
 # The timers below do NOT set Persistent=true, on purpose. That directive
 # makes systemd fire a timer immediately if it judges the current week's
 # slot already elapsed - and that check re-runs whenever the unit's
@@ -237,7 +249,8 @@ Description=Timer for ${UNIT} (fires ${CAL}, pre-roll ${PRE}s)
 
 [Timer]
 OnCalendar=${CAL}
-AccuracySec=1s
+# 1ms, not the 1s default - see 05-generator.sh for why.
+AccuracySec=1ms
 # No Persistent=true - a missed bell is skipped, not rung late. See
 # 05-generator.sh for why.
 
