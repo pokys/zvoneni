@@ -132,9 +132,22 @@ get_status() {
   NEXT_BELL=$(zvoneni-next-bell 2>/dev/null || echo "-")
   amp_summary
 
+  # Bells in the schedule vs. timers actually installed. The one failure
+  # that is otherwise silent: the generator runs on every boot and refuses
+  # an invalid or empty schedule, leaving the PREVIOUS timers running with
+  # only a journal entry to show for it.
+  SCHEDULED=$(grep -cvE '^[[:space:]]*(#|$)' /opt/zvoneni/schedule.txt 2>/dev/null || true)
+  [ -n "$SCHEDULED" ] || SCHEDULED=0
+  ACTIVE=$(ls -1 /etc/systemd/system/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9].timer 2>/dev/null | wc -l)
+  BELLS="$SCHEDULED scheduled / $ACTIVE active"
+  [ "$SCHEDULED" -eq "$ACTIVE" ] || BELLS="$BELLS  (!)"
+
+  # No blank separator: the header must stay at 9 lines so the main menu
+  # still fits an 80x24 SSH window (10 header + 7 items + dialog chrome
+  # would sit exactly on the clipping boundary).
   HEADER="SYSTEM STATE: $STATE
 Next bell:    $NEXT_BELL
-
+Bells:        $BELLS
 Time:         $TIME
 Clock gate:   $GATE
 IP address:   $IP

@@ -26,12 +26,23 @@ fi
 
 NEXT=$(/usr/local/bin/zvoneni-next-bell 2>/dev/null || echo "-")
 
-COUNT=$(systemctl list-timers --no-legend | grep -c zvoneni)
+# Bells in the schedule vs. timers actually installed. These diverge
+# silently in one case that matters: the generator runs on every boot and
+# refuses a schedule that is invalid or empty, so a broken schedule.txt
+# leaves the PREVIOUS timers running indefinitely, with the error only in
+# a journal nobody reads. Everywhere else the failure is loud at apply
+# time; here it is not, which is why the count sits on the login banner.
+SCHEDULED=$(grep -cvE '^[[:space:]]*(#|$)' /opt/zvoneni/schedule.txt 2>/dev/null || true)
+[ -n "$SCHEDULED" ] || SCHEDULED=0
+ACTIVE=$(ls -1 /etc/systemd/system/zvoneni-[A-Z][a-z][a-z]-[0-9][0-9][0-9][0-9].timer 2>/dev/null | wc -l)
+
+BELLS="$SCHEDULED scheduled / $ACTIVE active"
+[ "$SCHEDULED" -eq "$ACTIVE" ] || BELLS="$BELLS   (!) run Apply schedule"
 
 echo "State:       $STATE"
 echo "Time:        $TIME"
 echo "Clock:       $CLOCK"
-echo "Timers:      $COUNT active"
+echo "Bells:       $BELLS"
 echo "Next bell:   $NEXT"
 
 echo
